@@ -1,7 +1,8 @@
 name: Build VeilGram for iPhone
 
 on:
-  workflow_dispatch:
+  push:
+    branches: ['codex/ipa-build']
 
 permissions:
   contents: read
