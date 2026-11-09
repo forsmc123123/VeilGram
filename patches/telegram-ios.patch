@@ -1,0 +1,292 @@
+diff --git a/.bazelrc b/.bazelrc
+index 9fcd5a3..393de0f 100644
+--- a/.bazelrc
++++ b/.bazelrc
+@@ -27,3 +27,5 @@ build:macos --strategy=SwiftCompile=worker
+ 
+ common:macos --features=swift.use_global_module_cache
+ common:macos --features=oso_prefix_is_pwd
++
++try-import %workspace%/build-input/polus-sideload.bazelrc
+diff --git a/Telegram/BUILD b/Telegram/BUILD
+index 1ac8279..825d81b 100644
+--- a/Telegram/BUILD
++++ b/Telegram/BUILD
+@@ -341,7 +341,7 @@ alternate_icon_folders = [
+     "PremiumTurbo",
+ ]
+ 
+-composer_icon_folders = ["Telegram"]
++composer_icon_folders = ["VeilGram"]
+ 
+ [
+     filegroup(
+@@ -1696,11 +1696,11 @@ plist_fragment(
+     <key>CFBundleDevelopmentRegion</key>
+     <string>en</string>
+     <key>CFBundleDisplayName</key>
+-    <string>Telegram</string>
++    <string>VeilGram</string>
+     <key>CFBundleIdentifier</key>
+     <string>{telegram_bundle_id}</string>
+     <key>CFBundleName</key>
+-    <string>Telegram</string>
++    <string>VeilGram</string>
+     <key>CFBundlePackageType</key>
+     <string>APPL</string>
+     <key>CFBundleSignature</key>
+diff --git a/submodules/PasscodeCore/Sources/Passcode.swift b/submodules/PasscodeCore/Sources/Passcode.swift
+index d1ff0f6..56386f4 100644
+--- a/submodules/PasscodeCore/Sources/Passcode.swift
++++ b/submodules/PasscodeCore/Sources/Passcode.swift
+@@ -71,8 +71,15 @@ public final class PasscodeEnvironment: @unchecked Sendable {
+ 
+     public func sharedAccessGroup() throws -> String {
+         self.mutex.lock()
+-        defer { self.mutex.unlock() }
+-        guard let configuration = self.configuration else { throw PasscodeError.unavailable }
++        let current = self.configuration
++        self.mutex.unlock()
++        guard let configuration = current else { throw PasscodeError.unavailable }
++        #if os(iOS)
++        if configuration.processRole == .mainApp,
++           FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: configuration.appGroupIdentifier) == nil {
++            return try self.privateAccessGroup()
++        }
++        #endif
+         return configuration.appGroupIdentifier
+     }
+ 
+diff --git a/submodules/Postbox/Sources/Postbox.swift b/submodules/Postbox/Sources/Postbox.swift
+index 72585b3..a246bb6 100644
+--- a/submodules/Postbox/Sources/Postbox.swift
++++ b/submodules/Postbox/Sources/Postbox.swift
+@@ -226,17 +226,23 @@ public final class Transaction {
+         }
+     }
+     
+-    public func deleteMessagesWithGlobalIds(_ ids: [Int32], forEachMedia: ((Media) -> Void)?) {
++    public func deleteMessagesWithGlobalIds(_ ids: [Int32], excluding keptIds: Set<MessageId> = [], forEachMedia: ((Media) -> Void)?) {
+         assert(!self.disposed)
+         if let postbox = self.postbox {
+             // Every requested global id, stored or not: a message never stored here maps to no MessageId
+             // below, and a fetch in flight may be bringing it back (RecentlyDeletedMessages.swift).
+             postbox.messageHistoryTable.recentlyDeletedMessages.add(globalIds: ids)
+             let messageIds = postbox.messageIdsForGlobalIds(ids)
+-            postbox.deleteMessages(messageIds, forEachMedia: forEachMedia)
++            postbox.deleteMessages(messageIds.filter { !keptIds.contains($0) }, forEachMedia: forEachMedia)
+         }
+     }
+ 
++    public func recordMessageDeletions(_ ids: [MessageId]) {
++        assert(self.queue.isCurrent())
++        assert(!self.disposed)
++        self.postbox?.messageHistoryTable.recentlyDeletedMessages.add(ids: ids)
++    }
++
+     /// Whether `id` was deleted from this Postbox in the last few minutes (in memory, per process;
+     /// RecentlyDeletedMessages.swift): asked for by id, by global id (where its namespaces have global ids),
+     /// inside a deleted id range, or removed by a history clear or an author or tag removal. A fetch that was
+diff --git a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift b/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
+index cf1ab15..0534d98 100644
+--- a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
++++ b/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
+@@ -275,7 +275,8 @@ extension ReplayContext {
+     
+     func applyDeleteMessagesWithGlobalIds(_ ids: [Int32]) {
+         var resourceIds: [MediaResourceId] = []
+-        transaction.deleteMessagesWithGlobalIds(ids, forEachMedia: { media in
++        let kept = Set(transaction.messageIdsForGlobalIds(ids).filter(self.keepPolusDeletedMessage))
++        transaction.deleteMessagesWithGlobalIds(ids, excluding: kept, forEachMedia: { media in
+             addMessageMediaResourceIdsToRemove(media: media, resourceIds: &resourceIds)
+         })
+         if !resourceIds.isEmpty {
+@@ -285,7 +286,11 @@ extension ReplayContext {
+     }
+     
+     func applyDeleteMessages(_ ids: [MessageId]) {
+-        _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids, manualAddMessageThreadStatsDifference: { id, add, remove in
++        let kept = Set(ids.filter(self.keepPolusDeletedMessage))
++        if !kept.isEmpty {
++            transaction.recordMessageDeletions(Array(kept))
++        }
++        _internal_deleteMessages(transaction: transaction, mediaBox: mediaBox, ids: ids.filter { !kept.contains($0) }, manualAddMessageThreadStatsDifference: { id, add, remove in
+             self.addMessageThreadStatsDifference(threadKey: id, remove: remove, addedMessagePeer: nil, addedMessageId: nil, isOutgoing: false)
+         })
+         deletedMessageIds.append(contentsOf: ids.map { .messageId($0) })
+@@ -305,6 +310,7 @@ extension ReplayContext {
+     }
+     
+     func applyEditMessage(_ id: MessageId, _ message: StoreMessage) {
++        guard transaction.getMessage(id)?.isPolusDeleted != true else { return }
+         var generatedEvent: (reactionAuthor: Peer, reaction: MessageReaction.Reaction, message: Message, timestamp: Int32)?
+         transaction.updateMessage(id, update: { previousMessage in
+             let peers: [PeerId:Peer] = previousMessage.peers.reduce([:], { current, value in
+diff --git a/submodules/TelegramCore/Sources/SyncCore/SyncCore_NotificationInfoMessageAttribute.swift b/submodules/TelegramCore/Sources/SyncCore/SyncCore_NotificationInfoMessageAttribute.swift
+index 39f51dc..416888b 100644
+--- a/submodules/TelegramCore/Sources/SyncCore/SyncCore_NotificationInfoMessageAttribute.swift
++++ b/submodules/TelegramCore/Sources/SyncCore/SyncCore_NotificationInfoMessageAttribute.swift
+@@ -15,6 +15,7 @@ public struct NotificationInfoMessageAttributeFlags: OptionSet {
+     public static let muted = NotificationInfoMessageAttributeFlags(rawValue: 1 << 0)
+     public static let personal = NotificationInfoMessageAttributeFlags(rawValue: 1 << 1)
+     public static let automaticMessage = NotificationInfoMessageAttributeFlags(rawValue: 1 << 2)
++    public static let polusDeleted = NotificationInfoMessageAttributeFlags(rawValue: 1 << 3)
+ }
+ 
+ public class NotificationInfoMessageAttribute: MessageAttribute {
+@@ -32,3 +33,11 @@ public class NotificationInfoMessageAttribute: MessageAttribute {
+         encoder.encodeInt32(self.flags.rawValue, forKey: "f")
+     }
+ }
++
++public extension Message {
++    var isPolusDeleted: Bool {
++        self.attributes.contains { attribute in
++            (attribute as? NotificationInfoMessageAttribute)?.flags.contains(.polusDeleted) == true
++        }
++    }
++}
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
+index 50540f7..97ba503 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
+@@ -1612,7 +1612,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
+         }
+         replyRecognizer.shouldBegin = { [weak self, weak replyRecognizer] in
+             if let strongSelf = self, let item = strongSelf.item {
+-                if strongSelf.selectionNode != nil {
++                if strongSelf.selectionNode != nil || item.content.firstMessage.isPolusDeleted {
+                     return false
+                 }
+                 // A drag the content claims for itself (a message widget's touch-action) is not a swipe.
+@@ -4423,6 +4423,9 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
+         strongSelf.contentContainersWrapperNode.frame = CGRect(origin: CGPoint(), size: layout.contentSize)
+         
+         strongSelf.appliedItem = item
++        let polusMessageOpacity: CGFloat = item.content.firstMessage.isPolusDeleted ? 0.74 : 1.0
++        strongSelf.mainContextSourceNode.contentNode.alpha = polusMessageOpacity
++        strongSelf.contentContainersWrapperNode.alpha = polusMessageOpacity
+         strongSelf.appliedForwardInfo = ChatMessageAppliedForwardInfo(messageId: item.content.firstMessage.id, source: forwardSource, authorSignature: forwardAuthorSignature)
+         strongSelf.updateAccessibilityData(accessibilityData)
+         strongSelf.disablesComments = disablesComments
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+index bf71cb2..c7e5022 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageDateAndStatusNode/Sources/StringForMessageTimestampStatus.swift
+@@ -164,6 +164,9 @@ public func stringForMessageTimestampStatus(
+     }
+     
+     var dateText = stringForMessageTimestamp(timestamp: timestamp, dateTimeFormat: dateTimeFormat)
++    if message.attributes.contains(where: { ($0 as? NotificationInfoMessageAttribute)?.flags.contains(.polusDeleted) == true }) {
++        dateText = "🗑️ " + dateText
++    }
+     if timestamp == scheduleWhenOnlineTimestamp {
+         dateText = "         "
+     }
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+index 463ab66..a345436 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
+@@ -265,6 +265,10 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+     let edgeEffectView: EdgeEffectView
+     
+     let headerNode: PeerInfoHeaderNode
++    private var polusProfile = PolusProfile.empty
++    private var polusPanel: PolusProfilePanel?
++    private var polusPanelNode: ASDisplayNode?
++    private var polusProfileWasEdited = false
+     var underHeaderContentsAlpha: CGFloat = 1.0
+     var regularSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
+     var editingSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
+@@ -1715,6 +1719,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             }
+         }
+         
++        self.setupPolusProfile()
++
+         self.performNavigationButtonAction = { [weak self] key, source, gesture in
+             guard let strongSelf = self else {
+                 return
+@@ -4687,6 +4693,42 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+         self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
+     }
+     
++    private func setupPolusProfile() {
++        guard !self.isMediaOnly, self.peerId.namespace == Namespaces.Peer.CloudUser else { return }
++        let account = String(self.context.account.peerId.id._internalGetInt64Value())
++        let peer = String(self.peerId.id._internalGetInt64Value())
++        let canEdit = account == peer
++        let panel = PolusProfilePanel(frame: .zero)
++        let node = ASDisplayNode(viewBlock: { panel })
++        self.polusPanel = panel
++        self.polusPanelNode = node
++        self.scrollNode.insertSubnode(node, belowSubnode: self.paneContainerNode)
++
++        if canEdit {
++            self.polusProfile = PolusProfileService.localProfile(account)
++            panel.edit = { [weak self] in
++                guard let self, let controller = self.controller else { return }
++                let editor = PolusProfileEditor(account: account, profile: self.polusProfile) { [weak self] profile in
++                    self?.polusProfileWasEdited = true
++                    self?.applyPolusProfile(profile, canEdit: true)
++                }
++                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
++            }
++        }
++        panel.update(profile: self.polusProfile, canEdit: canEdit)
++        Task { @MainActor [weak self] in
++            guard let profile = try? await PolusProfileService.load(account: account, peer: peer),
++                  let self, !self.polusProfileWasEdited else { return }
++            self.applyPolusProfile(profile, canEdit: canEdit)
++        }
++    }
++
++    private func applyPolusProfile(_ profile: PolusProfile, canEdit: Bool) {
++        self.polusProfile = profile
++        self.polusPanel?.update(profile: profile, canEdit: canEdit)
++        self.requestLayout()
++    }
++
+     private func requestLayout(animated: Bool = false) {
+         self.headerNode.requestUpdateLayout?(animated)
+     }
+@@ -5741,6 +5783,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
+                 contentHeight += sectionSpacing + 12.0
+             }
++            if let panel = self.polusPanel, let node = self.polusPanelNode {
++                let showPanel = !self.state.isEditing && panel.preferredHeight > 0
++                node.isHidden = !showPanel
++                if showPanel {
++                    let left = insets.left + 16.0
++                    let width = max(0.0, layout.size.width - left - insets.right - 16.0)
++                    let frame = CGRect(x: left, y: contentHeight, width: width, height: panel.preferredHeight)
++                    transition.updateFrame(node: node, frame: frame)
++                    contentHeight += panel.preferredHeight + 20.0
++                }
++            }
+               
+             var isFirst = true
+             for (sectionId, sectionItems) in items {
+diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
+index cf30428..433afaa 100644
+--- a/submodules/TelegramUI/Sources/AppDelegate.swift
++++ b/submodules/TelegramUI/Sources/AppDelegate.swift
+@@ -691,8 +691,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+             networkEngineFactory: RustNetworkEngineFactory()
+         )
+         
+-        guard let appGroupUrl = maybeAppGroupUrl else {
+-            self.mainWindow?.presentNative(UIAlertController(title: nil, message: "Error 2", preferredStyle: .alert))
++        let appGroupUrl: URL
++        if let maybeAppGroupUrl {
++            appGroupUrl = maybeAppGroupUrl
++        } else if let localSupport = try? FileManager.default.url(
++            for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true
++        ) {
++            appGroupUrl = localSupport
++        } else {
++            self.mainWindow?.presentNative(UIAlertController(title: nil, message: "Не удалось открыть данные VeilGram.", preferredStyle: .alert))
+             return true
+         }
+         

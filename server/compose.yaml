@@ -1,0 +1,28 @@
+services:
+  profiles:
+    image: node:24-alpine
+    restart: unless-stopped
+    command: ["node", "/app/index.mjs"]
+    environment:
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?Set a BotFather token in .env}
+      PROFILE_DATABASE: /data/profiles.sqlite
+      HOST: 0.0.0.0
+    volumes:
+      - .:/app:ro
+      - profiles:/data
+  https:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on: [profiles]
+    environment:
+      PROFILE_DOMAIN: ${PROFILE_DOMAIN:?Set your HTTPS domain in .env}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - tls:/data
+
+volumes:
+  profiles:
+  tls:

@@ -1,0 +1,5 @@
+/Telegram-iOS/
+/server/data/
+/server/.env
+/out/
+/.build/

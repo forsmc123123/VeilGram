@@ -1,0 +1,20 @@
+{
+  "banners": [
+    {"id":"aurora","title":"Северное сияние","symbol":"✧","colors":["132D52","137F80","52D8B3"]},
+    {"id":"dusk","title":"Сумерки","symbol":"☾","colors":["25173E","673C78","E59890"]},
+    {"id":"ocean","title":"Океан","symbol":"≈","colors":["0B2550","176594","45BACD"]},
+    {"id":"sunrise","title":"Рассвет","symbol":"☀","colors":["792C49","CC5D5E","FFBD74"]},
+    {"id":"forest","title":"Хвойный лес","symbol":"✦","colors":["102D2D","376454","A4C97D"]}
+  ],
+  "gifts": [
+    {"id":"crystal","title":"Кристалл","symbol":"💎","colors":["254786","67BAE9"]},
+    {"id":"comet","title":"Комета","symbol":"☄️","colors":["3F2E7D","AB72ED"]},
+    {"id":"heart","title":"Сердце","symbol":"💝","colors":["822A57","EC779C"]},
+    {"id":"teddy","title":"Мишка","symbol":"🧸","colors":["774630","EDAD7C"]},
+    {"id":"flower","title":"Цветок","symbol":"🌷","colors":["285D46","7DCBA3"]},
+    {"id":"moon","title":"Луна","symbol":"🌙","colors":["62452C","F1BA66"]},
+    {"id":"rocket","title":"Ракета","symbol":"🚀","colors":["323F68","749DCE"]},
+    {"id":"cake","title":"Торт","symbol":"🎂","colors":["7C4158","ED9CB2"]},
+    {"id":"crown","title":"Корона","symbol":"👑","colors":["765523","EBC677"]}
+  ]
+}

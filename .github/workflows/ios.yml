@@ -1,0 +1,42 @@
+name: Build VeilGram for iPhone
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: xcode-27
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v6
+      - name: Select Xcode 27.1
+        run: |
+          sudo xcode-select --switch /Applications/Xcode_27.1.app/Contents/Developer
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain
+      - name: Prepare Bazel's restricted tool path
+        run: |
+          command -v ccache >/dev/null || brew install ccache
+          sudo mkdir -p /usr/local/bin
+          if ! env PATH=/bin:/usr/bin:/usr/local/bin ccache --version >/dev/null 2>&1; then
+            sudo ln -s "$(command -v ccache)" /usr/local/bin/ccache
+          fi
+          if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
+            sudo ln -s /usr/sbin/sysctl /usr/local/bin/sysctl
+          fi
+      - name: Compile and package for sideloading
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          POLUS_PROFILE_ORIGIN: ${{ vars.POLUS_PROFILE_ORIGIN }}
+          POLUS_BUNDLE_ID: ${{ vars.POLUS_BUNDLE_ID || 'org.polus.messenger' }}
+        run: python3 -u scripts/build_ios.py ipa --build-number "$((100000 + GITHUB_RUN_NUMBER))"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: VeilGram-unsigned
+          path: out/VeilGram-unsigned.ipa
+          if-no-files-found: error
+          retention-days: 7

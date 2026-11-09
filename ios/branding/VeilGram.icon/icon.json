@@ -1,0 +1,38 @@
+{
+  "fill": "system-light",
+  "groups": [
+    {
+      "blend-mode": "normal",
+      "layers": [
+        {
+          "glass": false,
+          "image-name": "Ghost.svg",
+          "name": "Ghost"
+        },
+        {
+          "glass": false,
+          "image-name": "Trace.svg",
+          "name": "Trace"
+        },
+        {
+          "fill-specializations": [
+            {
+              "value": {
+                "linear-gradient": [
+                  "srgb:0.12549,0.07059,0.21961,1.00000",
+                  "srgb:0.03529,0.03529,0.08235,1.00000"
+                ]
+              }
+            }
+          ],
+          "glass": false,
+          "image-name": "Background.svg",
+          "name": "Background"
+        }
+      ],
+      "specular": false,
+      "translucency": { "enabled": false, "value": 1 }
+    }
+  ],
+  "supported-platforms": { "squares": "shared" }
+}
