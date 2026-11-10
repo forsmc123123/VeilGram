@@ -50,12 +50,19 @@ def prepare(source, profile_origin):
 
     apply(source, ROOT / 'patches' / 'telegram-ios.patch')
     run('git', 'diff', '--check', cwd=source)
-    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift'):
+    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift', 'PolusGifts.swift'):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
                     source / 'submodules/TelegramCore/Sources/State/Sync/PolusDeletedMessages.swift')
     shutil.copytree(ROOT / 'ios' / 'branding' / 'VeilGram.icon',
                     source / 'Telegram' / 'Telegram-iOS' / 'VeilGram.icon', dirs_exist_ok=True)
+    icon_preview = source / 'Telegram' / 'Telegram-iOS' / 'Icons.xcassets' / 'VeilGramIcon.imageset'
+    icon_preview.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / 'ios' / 'branding' / 'veilgram-preview.png', icon_preview / 'VeilGram.png')
+    (icon_preview / 'Contents.json').write_text(json.dumps({
+        'images': [{'idiom': 'universal', 'filename': 'VeilGram.png'}],
+        'info': {'version': 1, 'author': 'xcode'},
+    }), encoding='utf-8')
     catalog = json.loads((ROOT / 'server' / 'catalog.json').read_text(encoding='utf-8'))
     catalog_json = json.dumps(catalog, ensure_ascii=False, separators=(',', ':'))
     config = source / PROFILE_SOURCES / 'PolusBuildConfig.swift'

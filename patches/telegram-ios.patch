@@ -35,6 +35,92 @@ index 1ac8279..825d81b 100644
      <key>CFBundlePackageType</key>
      <string>APPL</string>
      <key>CFBundleSignature</key>
+diff --git a/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift b/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift
+index 243b622..ce21248 100644
+--- a/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift
++++ b/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift
+@@ -10,7 +10,7 @@ private struct TranscriptionResult {
+     var isFinal: Bool
+ }
+ 
+-private func transcribeAudio(path: String, locale: String) -> Signal<TranscriptionResult?, NoError> {
++private func transcribeAudio(path: String, locale: String, onDeviceOnly: Bool) -> Signal<TranscriptionResult?, NoError> {
+     return Signal { subscriber in
+         let disposable = MetaDisposable()
+         
+@@ -41,23 +41,28 @@ private func transcribeAudio(path: String, locale: String) -> Signal<Transcripti
+                             speechRecognizerValue.defaultTaskHint = .dictation
+                             sharedRecognizers[locale] = speechRecognizerValue
+                             speechRecognizer = speechRecognizerValue
+-                            
+-                            if locale == "en-US" {
+-                                speechRecognizer.supportsOnDeviceRecognition = true
+-                            } else {
+-                                speechRecognizer.supportsOnDeviceRecognition = false
+-                            }
+-                            speechRecognizer.supportsOnDeviceRecognition = true
++                        }
++
++                        guard !onDeviceOnly || speechRecognizer.supportsOnDeviceRecognition else {
++                            subscriber.putNext(nil)
++                            subscriber.putCompletion()
++                            return
+                         }
+                         
+                         let tempFilePath = NSTemporaryDirectory() + "/\(UInt64.random(in: 0 ... UInt64.max)).m4a"
+-                        let _ = try? FileManager.default.copyItem(atPath: path, toPath: tempFilePath)
++                        do {
++                            try FileManager.default.copyItem(atPath: path, toPath: tempFilePath)
++                        } catch {
++                            subscriber.putNext(nil)
++                            subscriber.putCompletion()
++                            return
++                        }
+                         
+                         let request = SFSpeechURLRecognitionRequest(url: URL(fileURLWithPath: tempFilePath))
+                         if #available(iOS 16.0, *) {
+                             request.addsPunctuation = true
+                         }
+-                        request.requiresOnDeviceRecognition = speechRecognizer.supportsOnDeviceRecognition
++                        request.requiresOnDeviceRecognition = onDeviceOnly || speechRecognizer.supportsOnDeviceRecognition
+                         request.shouldReportPartialResults = false
+                         
+                         let task = speechRecognizer.recognitionTask(with: request, resultHandler: { result, error in
+@@ -66,7 +71,7 @@ private func transcribeAudio(path: String, locale: String) -> Signal<Transcripti
+                                 for segment in result.bestTranscription.segments {
+                                     confidence += segment.confidence
+                                 }
+-                                confidence /= Float(result.bestTranscription.segments.count)
++                                confidence /= Float(max(1, result.bestTranscription.segments.count))
+                                 subscriber.putNext(TranscriptionResult(text: result.bestTranscription.formattedString, confidence: confidence, isFinal: result.isFinal))
+                                 
+                                 if result.isFinal {
+@@ -82,6 +87,7 @@ private func transcribeAudio(path: String, locale: String) -> Signal<Transcripti
+                         
+                         disposable.set(ActionDisposable {
+                             task.cancel()
++                            try? FileManager.default.removeItem(atPath: tempFilePath)
+                         })
+                     @unknown default:
+                         subscriber.putNext(nil)
+@@ -104,7 +110,7 @@ public struct LocallyTranscribedAudio {
+     public var isFinal: Bool
+ }
+ 
+-public func transcribeAudio(path: String, appLocale: String) -> Signal<LocallyTranscribedAudio?, NoError> {
++public func transcribeAudio(path: String, appLocale: String, onDeviceOnly: Bool = false) -> Signal<LocallyTranscribedAudio?, NoError> {
+     var signals: [Signal<TranscriptionResult?, NoError>] = []
+     var locales: [String] = []
+     if !locales.contains(Locale.current.identifier) {
+@@ -114,7 +120,7 @@ public func transcribeAudio(path: String, appLocale: String) -> Signal<LocallyTr
+         locales.append("en-US")
+     }
+     for locale in locales {
+-        signals.append(transcribeAudio(path: path, locale: locale))
++        signals.append(transcribeAudio(path: path, locale: locale, onDeviceOnly: onDeviceOnly))
+     }
+     var resultSignal: Signal<[TranscriptionResult?], NoError> = .single([])
+     for signal in signals {
 diff --git a/submodules/PasscodeCore/Sources/Passcode.swift b/submodules/PasscodeCore/Sources/Passcode.swift
 index d1ff0f6..56386f4 100644
 --- a/submodules/PasscodeCore/Sources/Passcode.swift
@@ -87,6 +173,47 @@ index 72585b3..a246bb6 100644
      /// Whether `id` was deleted from this Postbox in the last few minutes (in memory, per process;
      /// RecentlyDeletedMessages.swift): asked for by id, by global id (where its namespaces have global ids),
      /// inside a deleted id range, or removed by a history clear or an author or tag removal. A fetch that was
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeColorPresets.swift b/submodules/SettingsUI/Sources/Themes/ThemeColorPresets.swift
+index afd1531..e30de9c 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeColorPresets.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeColorPresets.swift
+@@ -8,6 +8,7 @@ private func patternWallpaper(data: BuiltinWallpaperData, colors: [UInt32], inte
+ }
+ 
+ var dayClassicColorPresets: [PresentationThemeAccentColor] = [
++    PresentationThemeAccentColor(index: 140, baseColor: .preset, accentColor: 0xFF7956D9, bubbleColors: [0xFFE2D5FF, 0xFFC7B5FA], wallpaper: nil),
+     // Pink with Blue
+     PresentationThemeAccentColor(index: 106, baseColor: .preset, accentColor: 0xfff55783, bubbleColors: [0xffd6f5ff, 0xffc9fdfe], wallpaper: patternWallpaper(data: .default, colors: [0x8dc0eb, 0xb9d1ea, 0xc6b1ef, 0xebd7ef], intensity: 50, rotation: nil)),
+ 
+@@ -31,6 +32,7 @@ var dayClassicColorPresets: [PresentationThemeAccentColor] = [
+ ]
+ 
+ var dayColorPresets: [PresentationThemeAccentColor] = [
++    PresentationThemeAccentColor(index: 140, baseColor: .preset, accentColor: 0xFF7956D9, bubbleColors: [0xFF815BE9, 0xFF4C4CD4], wallpaper: nil),
+     PresentationThemeAccentColor(index: 101, baseColor: .preset, accentColor: 0x0088ff, bubbleColors: [0x0088ff, 0xff53f4], wallpaper: nil),
+     PresentationThemeAccentColor(index: 102, baseColor: .preset, accentColor: 0x00b09b, bubbleColors: [0xaee946, 0x00b09b], wallpaper: nil),
+     PresentationThemeAccentColor(index: 103, baseColor: .preset, accentColor: 0xd33213, bubbleColors: [0xf9db00, 0xd33213], wallpaper: nil),
+@@ -38,6 +40,7 @@ var dayColorPresets: [PresentationThemeAccentColor] = [
+ ]
+ 
+ var nightColorPresets: [PresentationThemeAccentColor] = [
++    PresentationThemeAccentColor(index: 140, baseColor: .preset, accentColor: 0xFFC4A7FF, bubbleColors: [0xFF584592, 0xFF34275F], wallpaper: nil),
+ //    PresentationThemeAccentColor(index: 101, baseColor: .preset, accentColor: 0x0088ff, bubbleColors: [0x0088ff, 0xff53f4], wallpaper: patternWallpaper(data: .variant4, colors: [0xe4b2ea, 0x8376c2, 0xeab9d9, 0xb493e6], intensity: -35, rotation: nil)),
+     PresentationThemeAccentColor(index: 102, baseColor: .preset, accentColor: 0x00b09b, bubbleColors: [0xaee946, 0x00b09b], wallpaper: patternWallpaper(data: .variant9, colors: [0xe4b2ea, 0x8376c2, 0xeab9d9, 0xb493e6], intensity: -35, rotation: nil)),
+     PresentationThemeAccentColor(index: 103, baseColor: .preset, accentColor: 0xd33213, bubbleColors: [0xf9db00, 0xd33213], wallpaper: patternWallpaper(data: .variant2, colors: [0xfec496, 0xdd6cb9, 0x962fbf, 0x4f5bd5], intensity: -40, rotation: nil)),
+diff --git a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+index f74a40b..b1eae9a 100644
+--- a/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
++++ b/submodules/SettingsUI/Sources/Themes/ThemeSettingsController.swift
+@@ -561,7 +561,7 @@ public func themeSettingsController(context: AccountContext, focusOnItemTag: The
+     
+     let availableAppIcons: Signal<[PresentationAppIcon], NoError> = .single(appIcons)
+     let currentAppIconName = ValuePromise<String?>()
+-    currentAppIconName.set(currentAppIcon?.name ?? "Blue")
++    currentAppIconName.set(currentAppIcon?.name ?? "VeilGram")
+     
+     let cloudThemes = Promise<[TelegramTheme]>()
+     let updatedCloudThemes = context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
 diff --git a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift b/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
 index cf1ab15..0534d98 100644
 --- a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
@@ -183,8 +310,311 @@ index bf71cb2..c7e5022 100644
      if timestamp == scheduleWhenOnlineTimestamp {
          dateText = "         "
      }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift
+index 7f64f67..15f3e0d 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift
+@@ -373,9 +373,12 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+         
+         let presentationData = context.sharedContext.currentPresentationData.with { $0 }
+         let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
++        let useVeilGramTranscription = arguments.file.isVoice && !arguments.file.isInstantVideo
++            && message.id.peerId.namespace != Namespaces.Peer.SecretChat && message.minAutoremoveOrClearTimeout == nil
++            && !arguments.associatedData.isPremium && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost
+         
+         let transcriptionText = self.forcedAudioTranscriptionText ?? transcribedText(message: EngineMessage(message))
+-        if transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
++        if !useVeilGramTranscription && transcriptionText == nil && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+             if premiumConfiguration.audioTransciptionTrialCount > 0 {
+                 if !arguments.associatedData.isPremium {
+                     if self.presentAudioTranscriptionTooltip(finished: false) {
+@@ -434,7 +437,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+                 self.audioTranscriptionState = .inProgress
+                 self.requestUpdateLayout(true)
+                 
+-                if context.sharedContext.immediateExperimentalUISettings.localTranscription {
++                if useVeilGramTranscription || context.sharedContext.immediateExperimentalUISettings.localTranscription {
+                     let appLocale = presentationData.strings.baseLanguageCode
+                     
+                     let signal: Signal<LocallyTranscribedAudio?, NoError> = context.engine.data.get(TelegramEngine.EngineData.Item.Messages.Message(id: message.id))
+@@ -466,12 +469,12 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+                         guard let result = result else {
+                             return .single(nil)
+                         }
+-                        return transcribeAudio(path: result, appLocale: appLocale)
++                        return transcribeAudio(path: result, appLocale: appLocale, onDeviceOnly: useVeilGramTranscription)
+                     }
+                     
+                     self.transcribeDisposable = (signal
+                     |> deliverOnMainQueue).startStrict(next: { [weak self] result in
+-                        guard let strongSelf = self, let arguments = strongSelf.arguments else {
++                        guard let strongSelf = self, let arguments = strongSelf.arguments, arguments.message.id == message.id else {
+                             return
+                         }
+                         
+@@ -480,6 +483,14 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+                         } else {
+                             strongSelf.audioTranscriptionState = .collapsed
+                             strongSelf.requestUpdateLayout(true)
++                            if useVeilGramTranscription {
++                                let alert = UndoOverlayController(presentationData: presentationData,
++                                    content: .universal(animation: "Transcribe", scale: 0.06, colors: [:], title: "Расшифровка VeilGram",
++                                        text: "Скачай голосовое и проверь, доступно ли на iPhone распознавание речи для твоего языка.",
++                                        customUndoText: nil, timeout: 5.0),
++                                    elevatedLayout: false, position: .top, animateInAsReplacement: false, action: { _ in false })
++                                arguments.controllerInteraction.presentControllerInCurrent(alert, nil)
++                            }
+                         }
+                     }, completed: { [weak self] in
+                         guard let strongSelf = self else {
+@@ -784,12 +795,15 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+                 var textString: NSAttributedString?
+                 var updatedAudioTranscriptionState: AudioTranscriptionButtonComponent.TranscriptionState?
+                 
++                let useVeilGramTranscription = arguments.file.isVoice && !isInstantVideo
++                    && arguments.message.minAutoremoveOrClearTimeout == nil && !arguments.associatedData.isPremium
++                    && !arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost
+                 var displayTranscribe = false
+                 if Namespaces.Message.allNonRegular.contains(arguments.message.id.namespace) {
+                     displayTranscribe = false
+                 } else if arguments.message.id.peerId.namespace != Namespaces.Peer.SecretChat && !isViewOnceMessage && !arguments.presentationData.isPreview {
+                     let premiumConfiguration = PremiumConfiguration.with(appConfiguration: arguments.context.currentAppConfiguration.with { $0 })
+-                    if arguments.associatedData.isPremium || arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
++                    if useVeilGramTranscription || arguments.associatedData.isPremium || arguments.associatedData.alwaysDisplayTranscribeButton.providedByGroupBoost {
+                         displayTranscribe = true
+                     } else if premiumConfiguration.audioTransciptionTrialCount > 0 {
+                         if arguments.incoming {
+@@ -818,7 +832,7 @@ public final class ChatMessageInteractiveFileNode: ASDisplayNode {
+                 }
+                 
+                 let currentTime = Int32(Date().timeIntervalSince1970)
+-                if transcribedText == nil, let cooldownUntilTime = arguments.associatedData.audioTranscriptionTrial.cooldownUntilTime, cooldownUntilTime > currentTime {
++                if !useVeilGramTranscription, transcribedText == nil, let cooldownUntilTime = arguments.associatedData.audioTranscriptionTrial.cooldownUntilTime, cooldownUntilTime > currentTime {
+                     updatedAudioTranscriptionState = .locked
+                 }
+                 
+diff --git a/submodules/TelegramUI/Components/ChatTitleView/Sources/ChatTitleComponent.swift b/submodules/TelegramUI/Components/ChatTitleView/Sources/ChatTitleComponent.swift
+index 3bba777..abd7c8d 100644
+--- a/submodules/TelegramUI/Components/ChatTitleView/Sources/ChatTitleComponent.swift
++++ b/submodules/TelegramUI/Components/ChatTitleView/Sources/ChatTitleComponent.swift
+@@ -161,6 +161,15 @@ public final class ChatNavigationBarTitleView: UIView, NavigationBarGlassPillTit
+     
+     public var tapAction: (() -> Void)?
+     public var longTapAction: (() -> Void)?
++    private var veilGramMember = false
++    private var veilGramColor: UInt32?
++
++    public func setVeilGramDecoration(member: Bool, color: UInt32?) {
++        guard self.veilGramMember != member || self.veilGramColor != color else { return }
++        self.veilGramMember = member
++        self.veilGramColor = color
++        self.update(transition: .immediate)
++    }
+     
+     override public init(frame: CGRect) {
+         super.init(frame: frame)
+@@ -294,6 +303,8 @@ public final class ChatNavigationBarTitleView: UIView, NavigationBarGlassPillTit
+                     leadingIcon: contentData.leadingIcon,
+                     activities: self.activities,
+                     networkState: self.networkState,
++                    veilGramMember: self.veilGramMember,
++                    veilGramColor: self.veilGramColor,
+                     tapped: { [weak self] in
+                         guard let self else {
+                             return
+@@ -373,6 +384,8 @@ public final class ChatTitleComponent: Component {
+     public let leadingIcon: ChatTitleLeadingIcon?
+     public let activities: Activities?
+     public let networkState: AccountNetworkState?
++    public let veilGramMember: Bool
++    public let veilGramColor: UInt32?
+     public let tapped: () -> Void
+     public let longTapped: () -> Void
+     
+@@ -389,6 +402,8 @@ public final class ChatTitleComponent: Component {
+         leadingIcon: ChatTitleLeadingIcon? = nil,
+         activities: Activities?,
+         networkState: AccountNetworkState?,
++        veilGramMember: Bool = false,
++        veilGramColor: UInt32? = nil,
+         tapped: @escaping () -> Void,
+         longTapped: @escaping () -> Void
+     ) {
+@@ -404,6 +419,8 @@ public final class ChatTitleComponent: Component {
+         self.leadingIcon = leadingIcon
+         self.activities = activities
+         self.networkState = networkState
++        self.veilGramMember = veilGramMember
++        self.veilGramColor = veilGramColor
+         self.tapped = tapped
+         self.longTapped = longTapped
+     }
+@@ -445,6 +462,9 @@ public final class ChatTitleComponent: Component {
+         if lhs.networkState != rhs.networkState {
+             return false
+         }
++        if lhs.veilGramMember != rhs.veilGramMember || lhs.veilGramColor != rhs.veilGramColor {
++            return false
++        }
+         return true
+     }
+     
+@@ -942,6 +962,14 @@ public final class ChatTitleComponent: Component {
+                 hidesGlass = component.labelsWithoutGlass && !enabled
+             }
+             
++            var veilGramTitle = false
++            if case let .peer(peerView, customTitle, _, _, isScheduled, _, _, _, _) = component.content,
++               !peerView.isSavedMessages, customTitle == nil, !isScheduled {
++                veilGramTitle = component.veilGramMember
++                if veilGramTitle {
++                    titleSegments.append(AnimatedTextComponent.Item(id: "veilgram", isUnbreakable: true, content: .text(" 👻")))
++                }
++            }
+             var accessibilityText = ""
+             for segment in titleSegments {
+                 switch segment.content {
+@@ -953,7 +981,7 @@ public final class ChatTitleComponent: Component {
+                     break
+                 }
+             }
+-            self.accessibilityLabel = accessibilityText
++            self.accessibilityLabel = veilGramTitle ? accessibilityText + ", участник VeilGram" : accessibilityText
+             
+             var inputActivitiesAllowed = true
+             switch component.content {
+@@ -1439,12 +1467,16 @@ public final class ChatTitleComponent: Component {
+             }
+             
+             let maxTitleWidth = availableSize.width - titleLeftIconsWidth - titleRightIconsWidth - containerSideInset * 2.0
++            let veilGramNameColor = veilGramTitle ? component.veilGramColor.map { value in
++                UIColor(red: CGFloat((value >> 16) & 255) / 255.0, green: CGFloat((value >> 8) & 255) / 255.0,
++                    blue: CGFloat(value & 255) / 255.0, alpha: 1.0)
++            } : nil
+             
+             let titleSize = self.title.update(
+                 transition: transition,
+                 component: AnyComponent(AnimatedTextComponent(
+                     font: Font.semibold(17.0),
+-                    color: component.theme.chat.inputPanel.panelControlColor,
++                    color: veilGramNameColor ?? component.theme.chat.inputPanel.panelControlColor,
+                     items: titleSegments,
+                     noDelay: false,
+                     animateScale: true,
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+index bd33bb7..ac41890 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
+@@ -171,6 +171,7 @@ swift_library(
+         "//submodules/TelegramUI/Components/CameraScreen",
+         "//submodules/TelegramUI/Components/PeerInfo/VerifyAlertController",
+         "//submodules/TelegramUI/Components/Gifts/GiftViewScreen",
++        "//submodules/TelegramUI/Components/Gifts/GiftItemComponent",
+         "//submodules/TelegramUI/Components/BatchVideoRendering",
+         "//submodules/TelegramUI/Components/GifVideoLayer",
+         "//submodules/Components/HierarchyTrackingLayer",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+index 7751e79..69d08a9 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
+@@ -130,6 +130,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+     let titleNodeContainer: ASDisplayNode
+     let titleNodeRawContainer: ASDisplayNode
+     let titleNode: MultiScaleTextNode
++    private var polusProfile = PolusProfile.empty
++    private var polusAvatarFrame: PolusAvatarFrame?
++    private var polusBadges: [UILabel] = []
+     var standardTitle: ComponentView<Empty>?
+     
+     let titleCredibilityIconView: ComponentHostView<Empty>
+@@ -1307,8 +1310,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             }
+ 
+             titleStringText = title
+-            titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white)
+-            smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: .white, shadowColor: titleShadowColor)
++            let nameColor = self.polusProfile.color.map(polusColor) ?? .white
++            titleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: nameColor)
++            smallTitleAttributes = MultiScaleTextState.Attributes(font: Font.medium(28.0), color: nameColor, shadowColor: titleShadowColor)
+             
+             if self.isSettings, case let .user(user) = peer {
+                 var subtitle = formatPhoneNumber(context: self.context, number: user.phone ?? "")
+@@ -1437,6 +1441,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         let expandedAvatarHeight: CGFloat = expandedAvatarListSize.height
+         
+         var titleConstrainedSize = CGSize(width: width - stripLeft - stripRight - textSideInset * 2.0 - (isPremium || isVerified || isFake ? 20.0 : 0.0), height: .greatestFiniteMagnitude)
++        if self.polusProfile.member == true {
++            titleConstrainedSize.width -= 22.0
++        }
+         if self.navigationRowRightButtonCount > 1 {
+             titleConstrainedSize.width -= 60.0
+         }
+@@ -1752,6 +1759,17 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+             }
+         }
+         
++        if self.polusBadges.count == 2 {
++            let visible = self.polusProfile.member == true && !state.isEditing
++            self.polusBadges[0].isHidden = !visible
++            self.polusBadges[1].isHidden = !visible
++            if visible {
++                titleHorizontalOffset -= 11.0
++                transition.updateFrame(view: self.polusBadges[0], frame: CGRect(x: nextIconX + 4.0, y: (titleSize.height - 18.0) / 2.0, width: 18.0, height: 18.0))
++                transition.updateFrame(view: self.polusBadges[1], frame: CGRect(x: nextExpandedIconX + 4.0, y: (titleExpandedSize.height - 18.0) / 2.0, width: 18.0, height: 18.0))
++            }
++        }
++
+         var titleFrame: CGRect
+         var subtitleFrame: CGRect
+         let usernameFrame: CGRect
+@@ -1966,6 +1984,11 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         }
+         let roundAvatarFrame = CGRect(origin: CGPoint(x: avatarCenter.x - roundAvatarSize.width / 2.0, y: -contentOffset + avatarOffset + avatarCenter.y - roundAvatarSize.height / 2.0), size: roundAvatarSize)
+         self.expansionRoundAvatarFrame = roundAvatarFrame
++        if let frame = self.polusAvatarFrame {
++            let hasFrame = self.polusProfile.banner != nil || self.polusProfile.media != nil
++            frame.setVisible(hasFrame && !self.isAvatarExpanded && !state.isEditing && !isSearching)
++            transition.updateFrame(view: frame, frame: roundAvatarFrame.insetBy(dx: -8.0, dy: -8.0))
++        }
+ 
+         var apparentAvatarFrame: CGRect
+         var apparentAvatarListFrame: CGRect
+@@ -2980,6 +3003,33 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         return result
+     }
+     
++    func applyPolusProfile(_ profile: PolusProfile, account: String, peer: String) {
++        self.polusProfile = profile
++        if self.polusAvatarFrame == nil && (profile.banner != nil || profile.media != nil) {
++            let frame = PolusAvatarFrame(frame: .zero)
++            frame.isHidden = true
++            self.avatarClippingNode.view.addSubview(frame)
++            self.polusAvatarFrame = frame
++        }
++        self.polusAvatarFrame?.apply(profile, account: account, peer: peer)
++
++        if self.polusBadges.isEmpty && profile.member == true {
++            for key in [TitleNodeStateRegular, TitleNodeStateExpanded] {
++                let badge = UILabel()
++                badge.text = "👻"
++                badge.font = .systemFont(ofSize: 12)
++                badge.textAlignment = .center
++                badge.backgroundColor = UIColor(red: 0.28, green: 0.17, blue: 0.50, alpha: 1)
++                badge.layer.cornerRadius = 9
++                badge.clipsToBounds = true
++                badge.isAccessibilityElement = true
++                badge.accessibilityLabel = "Участник VeilGram"
++                self.titleNode.stateNode(forKey: key)?.view.addSubview(badge)
++                self.polusBadges.append(badge)
++            }
++        }
++    }
++
+     func updateIsAvatarExpanded(_ isAvatarExpanded: Bool, transition: ContainedViewLayoutTransition) {
+         if self.isAvatarExpanded != isAvatarExpanded {
+             self.isAvatarExpanded = isAvatarExpanded
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-index 463ab66..a345436 100644
+index 463ab66..d8c8e6e 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 @@ -265,6 +265,10 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
@@ -207,7 +637,7 @@ index 463ab66..a345436 100644
          self.performNavigationButtonAction = { [weak self] key, source, gesture in
              guard let strongSelf = self else {
                  return
-@@ -4687,6 +4693,42 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -4687,6 +4693,55 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -224,33 +654,46 @@ index 463ab66..a345436 100644
 +
 +        if canEdit {
 +            self.polusProfile = PolusProfileService.localProfile(account)
-+            panel.edit = { [weak self] in
++            panel.action = { [weak self] in
 +                guard let self, let controller = self.controller else { return }
 +                let editor = PolusProfileEditor(account: account, profile: self.polusProfile) { [weak self] profile in
 +                    self?.polusProfileWasEdited = true
-+                    self?.applyPolusProfile(profile, canEdit: true)
++                    self?.applyPolusProfile(profile, account: account, peer: peer)
 +                }
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
++        } else {
++            panel.action = { [weak self] in
++                guard let self, let controller = self.controller else { return }
++                let picker = PolusGiftPicker(context: self.context, account: account, recipient: peer) { [weak self] in
++                    Task { @MainActor [weak self] in
++                        guard let self, let profile = try? await PolusProfileService.load(account: account, peer: peer) else { return }
++                        self.applyPolusProfile(profile, account: account, peer: peer)
++                    }
++                }
++                controller.present(UINavigationController(rootViewController: picker), animated: true, completion: nil)
++            }
 +        }
-+        panel.update(profile: self.polusProfile, canEdit: canEdit)
++        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
 +        Task { @MainActor [weak self] in
 +            guard let profile = try? await PolusProfileService.load(account: account, peer: peer),
 +                  let self, !self.polusProfileWasEdited else { return }
-+            self.applyPolusProfile(profile, canEdit: canEdit)
++            self.applyPolusProfile(profile, account: account, peer: peer)
 +        }
 +    }
 +
-+    private func applyPolusProfile(_ profile: PolusProfile, canEdit: Bool) {
++    private func applyPolusProfile(_ profile: PolusProfile, account: String, peer: String) {
 +        self.polusProfile = profile
-+        self.polusPanel?.update(profile: profile, canEdit: canEdit)
++        self.headerNode.applyPolusProfile(profile, account: account, peer: peer)
++        self.polusPanel?.update(context: self.context, profile: profile, canEdit: account == peer,
++            canGift: account != peer && profile.member == true && PolusProfileService.isLinked(account))
 +        self.requestLayout()
 +    }
 +
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5783,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5796,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -269,10 +712,62 @@ index 463ab66..a345436 100644
              var isFirst = true
              for (sectionId, sectionItems) in items {
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
-index cf30428..433afaa 100644
+index cf30428..4d53d8e 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
 +++ b/submodules/TelegramUI/Sources/AppDelegate.swift
-@@ -691,8 +691,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -236,6 +236,38 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+     )
+ }
+ 
++private final class VeilGramIslandLabel: UIView {
++    private let label = UILabel()
++
++    override init(frame: CGRect) {
++        super.init(frame: frame)
++        self.isUserInteractionEnabled = false
++        self.accessibilityElementsHidden = true
++        self.label.text = "VeilGram"
++        self.label.textAlignment = .center
++        self.label.font = .systemFont(ofSize: 9, weight: .semibold)
++        self.label.textColor = UIColor(red: 0.87, green: 0.81, blue: 1.0, alpha: 1.0)
++        self.label.backgroundColor = UIColor(white: 0.04, alpha: 0.92)
++        self.label.layer.cornerRadius = 7
++        self.label.clipsToBounds = true
++        self.addSubview(self.label)
++    }
++
++    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
++
++    override func layoutSubviews() {
++        super.layoutSubviews()
++        let top = self.window?.safeAreaInsets.top ?? 0
++        self.label.isHidden = top < 50 || self.bounds.width >= self.bounds.height
++        self.label.frame = CGRect(x: floor((self.bounds.width - 62) / 2.0), y: top - 10, width: 62, height: 14)
++    }
++
++    override func safeAreaInsetsDidChange() {
++        super.safeAreaInsetsDidChange()
++        self.setNeedsLayout()
++    }
++}
++
+ @objc(AppDelegate) class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate, URLSessionDelegate, URLSessionTaskDelegate {
+     @objc var window: UIWindow?
+     var nativeWindow: (UIWindow & WindowHost)?
+@@ -445,6 +477,12 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }
+         self.window = window
+         self.nativeWindow = window
++        if UIDevice.current.userInterfaceIdiom == .phone {
++            let islandLabel = VeilGramIslandLabel(frame: window.bounds)
++            islandLabel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
++            islandLabel.layer.zPosition = 1000
++            window.addSubview(islandLabel)
++        }
+         
+         hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
+         // On the first start after an update, compile the pipelines that would otherwise stall their first use.
+@@ -691,8 +729,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
              networkEngineFactory: RustNetworkEngineFactory()
          )
          
@@ -290,3 +785,47 @@ index cf30428..433afaa 100644
              return true
          }
          
+@@ -997,7 +1042,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+         }, getAvailableAlternateIcons: {
+             if #available(iOS 10.3, *) {
+                 var icons = [
+-                    PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon", isDefault: buildConfig.isAppStoreBuild),
++                    PresentationAppIcon(name: "VeilGram", imageName: "VeilGramIcon", isDefault: true),
++                    PresentationAppIcon(name: "BlueIcon", imageName: "BlueIcon"),
+                     PresentationAppIcon(name: "New2", imageName: "New2"),
+                     PresentationAppIcon(name: "New1", imageName: "New1"),
+                     PresentationAppIcon(name: "BlackIcon", imageName: "BlackIcon"),
+@@ -1010,9 +1056,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+                     icons.append(PresentationAppIcon(name: "WhiteFilledIcon", imageName: "WhiteFilledIcon"))
+                 }
+                 
+-                icons.append(PresentationAppIcon(name: "Premium", imageName: "Premium", isPremium: true))
+-                icons.append(PresentationAppIcon(name: "PremiumTurbo", imageName: "PremiumTurbo", isPremium: true))
+-                icons.append(PresentationAppIcon(name: "PremiumBlack", imageName: "PremiumBlack", isPremium: true))
++                icons.append(PresentationAppIcon(name: "Premium", imageName: "Premium"))
++                icons.append(PresentationAppIcon(name: "PremiumTurbo", imageName: "PremiumTurbo"))
++                icons.append(PresentationAppIcon(name: "PremiumBlack", imageName: "PremiumBlack"))
+                 
+                 return icons
+             } else {
+diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
+index f32b3c1..3e604b8 100644
+--- a/submodules/TelegramUI/Sources/ChatController.swift
++++ b/submodules/TelegramUI/Sources/ChatController.swift
+@@ -7813,6 +7813,16 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+         super.viewWillAppear(animated)
+         self.forwardSideListAppearance(.willAppear, animated: animated)
+ 
++        if case .peer = self.chatLocation, let peerId = self.chatLocation.peerId,
++           peerId.namespace == Namespaces.Peer.CloudUser, peerId != self.context.account.peerId {
++            let account = String(self.context.account.peerId.id._internalGetInt64Value())
++            let peer = String(peerId.id._internalGetInt64Value())
++            Task { @MainActor [weak self] in
++                let decoration = await VeilGramChatDecoration.load(account: account, peer: peer)
++                self?.chatTitleView?.setVeilGramDecoration(member: decoration.member, color: decoration.color)
++            }
++        }
++
+         self.walletTransferAnimationsVisible = true
+         self.chatDisplayNode.historyNode.forEachVisibleMessageItemNode { itemNode in
+             itemNode.unreadMessageRangeUpdated()

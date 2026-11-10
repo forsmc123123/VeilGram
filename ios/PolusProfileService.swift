@@ -1,5 +1,6 @@
 import Foundation
 import Security
+import CryptoKit
 
 struct PolusDecoration: Decodable, Sendable {
     let id: String
@@ -10,24 +11,35 @@ struct PolusDecoration: Decodable, Sendable {
 
 struct PolusCatalog: Decodable, Sendable {
     let banners: [PolusDecoration]
-    let gifts: [PolusDecoration]
 }
 
-struct PolusProfile: Codable, Sendable {
+struct PolusAvatarMedia: Codable, Equatable, Sendable {
+    enum Kind: String, Codable, Sendable {
+        case photo, gif, video
+
+        var contentType: String {
+            switch self {
+            case .photo: return "image/jpeg"
+            case .gif: return "image/gif"
+            case .video: return "video/mp4"
+            }
+        }
+    }
+
+    let id: String
+    let kind: Kind
+}
+
+struct PolusProfile: Codable, Equatable, Sendable {
     var banner: String?
-    var gifts: [String]
+    var media: PolusAvatarMedia?
+    var color: String?
+    var status: String?
+    var member: Bool?
+    var received: [String]?
+    var balance: Int?
 
-    static let empty = PolusProfile(banner: nil, gifts: [])
-
-    enum CodingKeys: String, CodingKey {
-        case banner, gifts
-    }
-
-    func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(self.banner, forKey: .banner)
-        try container.encode(self.gifts, forKey: .gifts)
-    }
+    static let empty = PolusProfile()
 }
 
 enum PolusProfileService {
@@ -44,6 +56,20 @@ enum PolusProfileService {
         let token: String
     }
 
+    private struct GiftOrder: Encodable {
+        let recipient: String
+        let item: String
+        let nonce: String
+    }
+
+    private struct GiftReceipt: Decodable {
+        let balance: Int
+    }
+
+    private struct ErrorBody: Decodable {
+        let error: String
+    }
+
     private struct LocalProfile: Codable {
         let profile: PolusProfile
         let unpublished: Bool
@@ -54,6 +80,9 @@ enum PolusProfileService {
         case invalidCode
         case authorizationExpired
         case cannotStoreSession
+        case invalidMedia
+        case insufficientStars
+        case recipientNotLinked
 
         var errorDescription: String? {
             switch self {
@@ -61,13 +90,34 @@ enum PolusProfileService {
             case .invalidCode: return "Код не подошёл. Получите новый код в боте с этого Telegram-аккаунта."
             case .authorizationExpired: return "Срок подключения истёк. Подключите профиль заново."
             case .cannotStoreSession: return "Не удалось сохранить подключение на iPhone."
+            case .invalidMedia: return "Не удалось открыть рамку. Выберите фото, GIF или видео размером до 8 МБ."
+            case .insufficientStars: return "Не хватает визуальных звёзд VeilGram."
+            case .recipientNotLinked: return "Получатель ещё не подключил профиль VeilGram."
             }
         }
     }
 
-    private static let origin = URL(string: PolusBuildConfig.profileOrigin)
-    static let catalog = (try? JSONDecoder().decode(PolusCatalog.self, from: Data(PolusBuildConfig.catalogJSON.utf8))) ?? PolusCatalog(banners: [], gifts: [])
-    static var canSync: Bool { self.origin?.scheme == "https" }
+    private static let originKey = "polus.profile.origin"
+    private static var origin: URL? { URL(string: self.originText).flatMap { $0.scheme == "https" ? $0 : nil } }
+    static var originText: String { UserDefaults.standard.string(forKey: self.originKey) ?? PolusBuildConfig.profileOrigin }
+    static let catalog = (try? JSONDecoder().decode(PolusCatalog.self, from: Data(PolusBuildConfig.catalogJSON.utf8))) ?? PolusCatalog(banners: [])
+    static var canSync: Bool { self.origin != nil }
+    static let mediaLimit = 8 * 1024 * 1024
+
+    @MainActor
+    static func configureOrigin(_ value: String) -> Bool {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.isEmpty {
+            UserDefaults.standard.removeObject(forKey: self.originKey)
+            return true
+        }
+        guard let parts = URLComponents(string: trimmed), parts.scheme == "https",
+              let host = parts.host, !host.isEmpty,
+              parts.user == nil, parts.password == nil, parts.query == nil, parts.fragment == nil,
+              parts.path.isEmpty || parts.path == "/" else { return false }
+        UserDefaults.standard.set(trimmed, forKey: self.originKey)
+        return true
+    }
 
     private static func localKey(_ account: String) -> String { "polus.profile.\(account)" }
 
@@ -104,17 +154,17 @@ enum PolusProfileService {
         self.canSync && self.token(account) != nil
     }
 
-    private static func request<Response: Decodable>(_ path: String, method: String = "GET", token: String? = nil, body: Data? = nil) async throws -> Response {
+    private static func bytes(_ path: String, method: String = "GET", token: String? = nil, body: Data? = nil, contentType: String = "application/json") async throws -> Data {
         guard let origin = self.origin, self.canSync else { throw ServiceError.unavailable }
         let url = path.split(separator: "/").reduce(origin) { $0.appendingPathComponent(String($1)) }
-        var request = URLRequest(url: url, timeoutInterval: 15)
+        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: 30)
         request.httpMethod = method
         if let token {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         }
         if let body {
             request.httpBody = body
-            request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+            request.setValue(contentType, forHTTPHeaderField: "Content-Type")
         }
         let data: Data
         let response: URLResponse
@@ -127,9 +177,19 @@ enum PolusProfileService {
         if httpResponse.statusCode == 401 {
             throw token == nil ? ServiceError.invalidCode : ServiceError.authorizationExpired
         }
-        guard httpResponse.statusCode == 200, let decoded = try? JSONDecoder().decode(Response.self, from: data) else {
+        if httpResponse.statusCode == 409, let error = try? JSONDecoder().decode(ErrorBody.self, from: data) {
+            if error.error == "insufficient_stars" { throw ServiceError.insufficientStars }
+            if error.error == "recipient_not_linked" { throw ServiceError.recipientNotLinked }
+        }
+        guard httpResponse.statusCode == 200 else {
             throw ServiceError.unavailable
         }
+        return data
+    }
+
+    private static func request<Response: Decodable>(_ path: String, method: String = "GET", token: String? = nil, body: Data? = nil, contentType: String = "application/json") async throws -> Response {
+        let data = try await self.bytes(path, method: method, token: token, body: body, contentType: contentType)
+        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else { throw ServiceError.unavailable }
         return decoded
     }
 
@@ -162,15 +222,17 @@ enum PolusProfileService {
     @MainActor
     static func load(account: String, peer: String) async throws -> PolusProfile {
         let ownProfile = account == peer
-        if ownProfile, let local = self.localRecord(account), local.unpublished {
-            return local.profile
-        }
         guard self.canSync, let token = self.token(account) else {
             return ownProfile ? self.localProfile(account) : .empty
         }
         do {
-            let profile: PolusProfile = try await self.request("v1/profiles/\(peer)", token: token)
-            if ownProfile, self.localRecord(account)?.unpublished != true {
+            var profile: PolusProfile = try await self.request("v2/profiles/\(peer)", token: token)
+            if ownProfile, let local = self.localRecord(account), local.unpublished {
+                profile.banner = local.profile.banner
+                profile.media = local.profile.media
+                profile.color = local.profile.color
+                profile.status = local.profile.status
+            } else if ownProfile {
                 self.saveLocal(account, profile: profile, unpublished: false)
             }
             return profile
@@ -183,12 +245,21 @@ enum PolusProfileService {
     @MainActor
     static func save(account: String, profile: PolusProfile) async throws -> PolusProfile {
         guard self.canSync, let token = self.token(account) else {
-            self.saveLocal(account, profile: profile, unpublished: true)
-            return profile
+            var local = profile
+            local.member = nil
+            local.balance = nil
+            local.received = nil
+            self.saveLocal(account, profile: local, unpublished: true)
+            return local
         }
-        let body = try JSONEncoder().encode(profile)
         do {
-            let saved: PolusProfile = try await self.request("v1/me", method: "PUT", token: token, body: body)
+            if let media = profile.media {
+                let data = try await self.mediaData(account: account, peer: account, media: media)
+                let uploaded: PolusAvatarMedia = try await self.request("v2/me/media/\(media.kind.rawValue)", method: "POST", token: token, body: data, contentType: media.kind.contentType)
+                guard uploaded == media else { throw ServiceError.invalidMedia }
+            }
+            let body = try JSONEncoder().encode(PolusProfile(banner: profile.banner, media: profile.media, color: profile.color, status: profile.status))
+            let saved: PolusProfile = try await self.request("v2/me", method: "PUT", token: token, body: body)
             self.saveLocal(account, profile: saved, unpublished: false)
             return saved
         } catch ServiceError.authorizationExpired {
@@ -197,9 +268,66 @@ enum PolusProfileService {
         }
     }
 
+    @MainActor
+    static func sendGift(account: String, recipient: String, item: String, nonce: UUID) async throws -> Int {
+        guard let token = self.token(account) else { throw ServiceError.authorizationExpired }
+        do {
+            let body = try JSONEncoder().encode(GiftOrder(recipient: recipient, item: item, nonce: nonce.uuidString.lowercased()))
+            let receipt: GiftReceipt = try await self.request("v2/gifts", method: "POST", token: token, body: body)
+            return receipt.balance
+        } catch ServiceError.authorizationExpired {
+            self.removeExpiredToken(token, account: account)
+            throw ServiceError.authorizationExpired
+        }
+    }
+
+    private static func mediaId(_ data: Data, kind: PolusAvatarMedia.Kind) -> String {
+        var hash = SHA256()
+        hash.update(data: Data(kind.rawValue.utf8))
+        hash.update(data: data)
+        return hash.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func mediaPath(_ account: String, media: PolusAvatarMedia) throws -> URL {
+        guard account.range(of: "^[1-9][0-9]{0,15}$", options: .regularExpression) != nil,
+              media.id.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else { throw ServiceError.invalidMedia }
+        let folder = try FileManager.default.url(for: .applicationSupportDirectory, in: .userDomainMask, appropriateFor: nil, create: true)
+            .appendingPathComponent("VeilGramAvatar", isDirectory: true).appendingPathComponent(account, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return folder.appendingPathComponent(media.id)
+    }
+
+    static func storeMedia(_ data: Data, kind: PolusAvatarMedia.Kind, account: String) throws -> PolusAvatarMedia {
+        guard !data.isEmpty, data.count <= self.mediaLimit else { throw ServiceError.invalidMedia }
+        let media = PolusAvatarMedia(id: self.mediaId(data, kind: kind), kind: kind)
+        try data.write(to: self.mediaPath(account, media: media), options: .atomic)
+        return media
+    }
+
+    static func mediaData(account: String, peer: String, media: PolusAvatarMedia) async throws -> Data {
+        if account == peer, let data = try? Data(contentsOf: self.mediaPath(account, media: media)) {
+            return data
+        }
+        guard let token = self.token(account) else { throw ServiceError.authorizationExpired }
+        let data = try await self.bytes("v2/media/\(peer)/\(media.id)", token: token)
+        guard data.count <= self.mediaLimit, self.mediaId(data, kind: media.kind) == media.id else { throw ServiceError.invalidMedia }
+        if account == peer {
+            try data.write(to: self.mediaPath(account, media: media), options: .atomic)
+        }
+        return data
+    }
+
     private static func removeExpiredToken(_ token: String, account: String) {
         if self.token(account) == token {
             SecItemDelete(self.tokenQuery(account) as CFDictionary)
         }
+    }
+}
+
+public enum VeilGramChatDecoration {
+    @MainActor
+    public static func load(account: String, peer: String) async -> (member: Bool, color: UInt32?) {
+        guard let profile = try? await PolusProfileService.load(account: account, peer: peer) else { return (false, nil) }
+        return (profile.member == true, profile.color.flatMap { UInt32($0, radix: 16) })
     }
 }
