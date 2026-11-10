@@ -1,0 +1,34 @@
+workflows:
+  veilgram-ipa:
+    name: Build VeilGram for iPhone
+    instance_type: mac_mini_m2
+    max_build_duration: 90
+    environment:
+      xcode: '27.1'
+      groups:
+        - veilgram_telegram
+    scripts:
+      - name: Check Telegram app configuration
+        script: |
+          set -euo pipefail
+          : "${TELEGRAM_API_ID:?Add TELEGRAM_API_ID to the veilgram_telegram group}"
+          : "${TELEGRAM_API_HASH:?Add TELEGRAM_API_HASH to the veilgram_telegram group}"
+      - name: Prepare Xcode and Bazel tools
+        script: |
+          set -euo pipefail
+          xcodebuild -version
+          xcodebuild -downloadComponent MetalToolchain
+          command -v ccache >/dev/null || brew install ccache
+          sudo mkdir -p /usr/local/bin
+          if ! env PATH=/bin:/usr/bin:/usr/local/bin ccache --version >/dev/null 2>&1; then
+            sudo ln -s "$(command -v ccache)" /usr/local/bin/ccache
+          fi
+          if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
+            sudo ln -s /usr/sbin/sysctl /usr/local/bin/sysctl
+          fi
+      - name: Compile and package for sideloading
+        script: |
+          set -euo pipefail
+          python3 -u scripts/build_ios.py ipa --build-number "$((100100 + BUILD_NUMBER))"
+    artifacts:
+      - out/VeilGram-unsigned.ipa
