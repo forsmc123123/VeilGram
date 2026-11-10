@@ -2,7 +2,6 @@ import UIKit
 import AccountContext
 import ComponentFlow
 import GiftItemComponent
-import Postbox
 import SwiftSignalKit
 import TelegramCore
 
@@ -106,7 +105,7 @@ final class PolusGiftTile: UIView {
 
 final class PolusGiftPicker: UITableViewController {
     private let context: AccountContext
-    private let recipient: PeerId
+    private let recipient: EnginePeer.Id
     private let didSend: () -> Void
     private let catalogLoad = MetaDisposable()
     private let collectibleLoad = MetaDisposable()
@@ -114,7 +113,7 @@ final class PolusGiftPicker: UITableViewController {
     private var collectible: StarGift?
     private var busy = false
 
-    init(context: AccountContext, recipient: PeerId, didSend: @escaping () -> Void) {
+    init(context: AccountContext, recipient: EnginePeer.Id, didSend: @escaping () -> Void) {
         self.context = context
         self.recipient = recipient
         self.didSend = didSend
