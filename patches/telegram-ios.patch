@@ -502,7 +502,7 @@ index 3bba777..abd7c8d 100644
                      noDelay: false,
                      animateScale: true,
 diff --git a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
-index e1624f6..31b662d 100644
+index e1624f6..ce18593 100644
 --- a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
 +++ b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
 @@ -120,6 +120,8 @@ private final class GiftSetupScreenComponent: Component {
@@ -514,7 +514,7 @@ index e1624f6..31b662d 100644
          
          private var ignoreScrolling: Bool = false
          
-@@ -340,7 +342,48 @@ private final class GiftSetupScreenComponent: Component {
+@@ -340,7 +342,50 @@ private final class GiftSetupScreenComponent: Component {
              self.bottomEdgeEffectView.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: animateOffset), duration: 0.3, timingFunction: CAMediaTimingFunctionName.easeInEaseOut.rawValue, removeOnCompletion: false, additive: true)
          }
          
@@ -539,7 +539,7 @@ index e1624f6..31b662d 100644
 +                    guard let self, !self.isSendingVeilGramGift else { return }
 +                    self.isSendingVeilGramGift = true
 +                    self.state?.updated()
-+                    Task { @MainActor [weak self, weak controller] in
++                    Task { @MainActor [weak self] in
 +                        let text: String
 +                        do {
 +                            try await actions.send(component.context, component.peerId, gift)
@@ -547,11 +547,13 @@ index e1624f6..31b662d 100644
 +                        } catch {
 +                            text = error.localizedDescription
 +                        }
-+                        self?.isSendingVeilGramGift = false
-+                        self?.state?.updated()
++                        guard let self else { return }
++                        self.isSendingVeilGramGift = false
++                        self.state?.updated()
++                        guard let controller = self.environment?.controller() else { return }
 +                        let result = UIAlertController(title: "VeilGram", message: text, preferredStyle: .alert)
 +                        result.addAction(UIAlertAction(title: "ОК", style: .default))
-+                        controller?.present(result, animated: true)
++                        controller.present(result, animated: true)
 +                    }
 +                })
 +            }
@@ -563,7 +565,7 @@ index e1624f6..31b662d 100644
              guard !self.inProgress, let component = self.component, let environment = self.environment else {
                  return
              }
-@@ -2047,7 +2090,7 @@ private final class GiftSetupScreenComponent: Component {
+@@ -2047,7 +2092,7 @@ private final class GiftSetupScreenComponent: Component {
                          id: AnyHashable("title"),
                          component: AnyComponent(VStack(buttonTitleItems, spacing: 1.0))
                      ),
@@ -572,7 +574,7 @@ index e1624f6..31b662d 100644
                      displaysProgress: self.inProgress,
                      action: { [weak self] in
                          self?.proceed()
-@@ -2056,7 +2099,13 @@ private final class GiftSetupScreenComponent: Component {
+@@ -2056,7 +2101,13 @@ private final class GiftSetupScreenComponent: Component {
                  environment: {},
                  containerSize: CGSize(width: fillingSize - buttonInsets.left - buttonInsets.right, height: buttonHeight)
              )
@@ -587,7 +589,7 @@ index e1624f6..31b662d 100644
              
              let bottomEdgeEffectHeight: CGFloat = bottomPanelHeight
              let bottomEdgeEffectFrame = CGRect(origin: CGPoint(x: rawSideInset, y: availableSize.height - bottomEdgeEffectHeight), size: CGSize(width: fillingSize, height: bottomEdgeEffectHeight))
-@@ -2066,20 +2115,37 @@ private final class GiftSetupScreenComponent: Component {
+@@ -2066,20 +2117,37 @@ private final class GiftSetupScreenComponent: Component {
                  self.containerView.addSubview(self.bottomEdgeEffectView)
              }
              
