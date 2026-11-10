@@ -70,8 +70,6 @@ def prepare(source):
         'images': [{'idiom': 'universal', 'filename': 'VeilGram.png'}],
         'info': {'version': 1, 'author': 'xcode'},
     }), encoding='utf-8')
-    catalog = json.loads((ROOT / 'server' / 'catalog.json').read_text(encoding='utf-8'))
-    catalog_json = json.dumps(catalog, ensure_ascii=False, separators=(',', ':'))
     hosted_url = os.environ.get('VEILGRAM_HOSTED_URL', '').strip()
     hosted_certificate_hash = os.environ.get('VEILGRAM_CERTIFICATE_SHA256', '').strip().lower()
     if hosted_url and not re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?', hosted_url):
@@ -81,7 +79,6 @@ def prepare(source):
     config = source / PROFILE_SOURCES / 'PolusBuildConfig.swift'
     config.write_text(
         f'enum PolusBuildConfig {{\n'
-        f'    static let catalogJSON = {json.dumps(catalog_json, ensure_ascii=False)}\n'
         f'    static let hostedURL = {json.dumps(hosted_url)}\n'
         f'    static let hostedCertificateHash = {json.dumps(hosted_certificate_hash)}\n'
         f'}}\n', encoding='utf-8',

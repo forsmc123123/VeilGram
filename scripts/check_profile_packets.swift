@@ -4,9 +4,6 @@ import TelegramCore
 enum PolusBuildConfig {
     static let hostedURL = ""
     static let hostedCertificateHash = ""
-    static let catalogJSON = """
-    {"banners":[{"id":"aurora","title":"Aurora","symbol":"✦","colors":["8877FF","6699FF"]}]}
-    """
 }
 
 @main
@@ -14,13 +11,19 @@ struct CheckProfilePackets {
     static func main() throws {
         let account = "120000000000001"
         let peer = "120000000000002"
-        let style = PolusProfile(banner: "aurora", color: "C4A7FF", status: "Привет", received: ["nft:PlushPepe-42", "invalid"])
+        let style = PolusProfile(color: "C4A7FF", status: "Привет", received: ["nft:PlushPepe-42", "invalid"])
         let packet = try PolusProfileService.packet(profile: style, gift: nil, account: account)
         let decoded = PolusProfileService.readPacket(packet, account: account, peer: peer)?.profile
-        precondition(decoded?.member == true && decoded?.banner == "aurora" && decoded?.color == "C4A7FF")
+        precondition(decoded?.member == true && decoded?.color == "C4A7FF")
         precondition(decoded?.status == "Привет" && decoded?.received == ["nft:PlushPepe-42"])
         precondition(PolusProfileService.readPacket(Data(packet.dropLast()), account: account, peer: peer) == nil)
         precondition(PolusProfileService.readPacket(packet + Data([0]), account: account, peer: peer) == nil)
+
+        let legacyHeader = Data(#"{"version":2,"profile":{"banner":"aurora","color":"C4A7FF"}}"#.utf8)
+        var legacyLength = UInt32(legacyHeader.count).bigEndian
+        let legacyPacket = withUnsafeBytes(of: &legacyLength) { Data($0) } + legacyHeader
+        let legacyProfile = PolusProfileService.readPacket(legacyPacket, account: account, peer: peer)?.profile
+        precondition(legacyProfile?.color == "C4A7FF" && legacyProfile?.media == nil)
 
         let gift = try PolusProfileService.packet(profile: nil, gift: "nft:PlushPepe-42", account: account)
         precondition(PolusProfileService.readPacket(gift, account: account, peer: peer)?.gift == "nft:PlushPepe-42")
