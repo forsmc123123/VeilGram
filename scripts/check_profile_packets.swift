@@ -21,8 +21,17 @@ struct CheckProfilePackets {
 
         let gift = try PolusProfileService.packet(profile: nil, gift: "nft:PlushPepe-42", account: account)
         precondition(PolusProfileService.readPacket(gift, account: account, peer: peer)?.gift == "nft:PlushPepe-42")
+        precondition(VeilGramGiftLink.readLegacy(gift) == "nft:PlushPepe-42")
+        for item in ["gift:123", "nft:PlushPepe-42"] {
+            let url = VeilGramGiftLink.url(for: item)!
+            precondition(VeilGramGiftLink.item(from: url) == item)
+            precondition(VeilGramGiftLink.item(from: url.replacingOccurrences(of: "core.telegram.org", with: "example.com")) == nil)
+        }
+        precondition(VeilGramGiftLink.url(for: "gift:0") == nil)
+        precondition(VeilGramGiftLink.item(from: "https://core.telegram.org/api/gifts#veilgram-gift=gift%3A123") == "gift:123")
         let ambiguous = try PolusProfileService.packet(profile: style, gift: "gift:123", account: account)
         precondition(PolusProfileService.readPacket(ambiguous, account: account, peer: peer) == nil)
+        precondition(VeilGramGiftLink.readLegacy(ambiguous) == nil)
         let bogusGift = try PolusProfileService.packet(profile: nil, gift: "gift:abc", account: account)
         precondition(PolusProfileService.readPacket(bogusGift, account: account, peer: peer) == nil)
         precondition(PolusProfileService.collectibleSlug("https://t.me/nft/PlushPepe-42?single") == "PlushPepe-42")

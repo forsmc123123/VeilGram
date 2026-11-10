@@ -54,6 +54,10 @@ def prepare(source):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
                     source / 'submodules/TelegramCore/Sources/State/Sync/PolusDeletedMessages.swift')
+    for filename in ('VeilGramGiftLink.swift', 'VeilGramGiftMessage.swift'):
+        shutil.copyfile(ROOT / 'ios' / filename, source / 'submodules/TelegramCore/Sources/State/Sync' / filename)
+    shutil.copyfile(ROOT / 'ios' / 'VeilGramGiftBubble.swift',
+                    source / 'submodules/TelegramUI/Components/Chat/ChatMessageGiftBubbleContentNode/Sources/VeilGramGiftBubble.swift')
     shutil.copyfile(ROOT / 'ios' / 'VeilGramVisualGiftActions.swift',
                     source / 'submodules/AccountContext/Sources/VeilGramVisualGiftActions.swift')
     shutil.copytree(ROOT / 'ios' / 'branding' / 'VeilGram.icon',

@@ -5,7 +5,6 @@ import TelegramCore
 
 enum PolusTelegramExchange {
     private static let profileFile = "VeilGram.vgprofile"
-    private static let giftFile = "VeilGram.vggift"
     private static let mimeType = "application/octet-stream"
     private static let allowance = 1000
 
@@ -41,11 +40,18 @@ enum PolusTelegramExchange {
         guard let cost = PolusProfileService.giftCost(item), self.balance(context) >= cost else {
             throw PolusProfileService.ServiceError.insufficientStars
         }
-        let data = try PolusProfileService.packet(profile: nil, gift: item, account: self.account(context))
+        guard let url = VeilGramGiftLink.url(for: item) else { throw PolusProfileService.ServiceError.couldNotSend }
+        let caption = VeilGramGiftLink.caption
+        let entity = MessageTextEntity(range: 0..<caption.utf16.count, type: .TextUrl(url: url))
+        let message = EnqueueMessage.message(text: caption + "\n" + title, attributes: [
+            TextEntitiesMessageAttribute(entities: [entity]),
+            OutgoingContentInfoMessageAttribute(flags: .disableLinkPreviews)
+        ], inlineStickers: [:], mediaReference: nil, threadId: nil, replyToMessageId: nil, replyToStoryId: nil,
+            localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
         let key = self.walletKey(context)
         UserDefaults.standard.set(UserDefaults.standard.integer(forKey: key) + cost, forKey: key)
         do {
-            try await self.enqueue(context: context, peer: peer, name: self.giftFile, caption: "🎁 Визуальный подарок VeilGram: \(title)", data: data)
+            try await self.enqueueMessage(context: context, peer: peer, message: message)
         } catch {
             UserDefaults.standard.set(max(0, UserDefaults.standard.integer(forKey: key) - cost), forKey: key)
             throw error
@@ -53,9 +59,6 @@ enum PolusTelegramExchange {
     }
 
     private static func enqueue(context: AccountContext, peer: EnginePeer.Id, name: String, caption: String, data: Data) async throws {
-        guard peer.namespace == Namespaces.Peer.CloudUser, peer != context.account.peerId else {
-            throw PolusProfileService.ServiceError.couldNotSend
-        }
         let id = Int64.random(in: Int64.min...Int64.max)
         let size = Int64(data.count)
         let resource = LocalFileMediaResource(fileId: id, size: size)
@@ -67,6 +70,13 @@ enum PolusTelegramExchange {
         let message = EnqueueMessage.message(text: caption, attributes: [], inlineStickers: [:],
             mediaReference: .standalone(media: file), threadId: nil, replyToMessageId: nil, replyToStoryId: nil,
             localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
+        try await self.enqueueMessage(context: context, peer: peer, message: message)
+    }
+
+    private static func enqueueMessage(context: AccountContext, peer: EnginePeer.Id, message: EnqueueMessage) async throws {
+        guard peer.namespace == Namespaces.Peer.CloudUser, peer != context.account.peerId else {
+            throw PolusProfileService.ServiceError.couldNotSend
+        }
         guard let ids = await self.first(enqueueMessages(account: context.account, peerId: peer, messages: [message])),
               ids.contains(where: { $0 != nil }) else { throw PolusProfileService.ServiceError.couldNotSend }
     }
@@ -81,29 +91,37 @@ enum PolusTelegramExchange {
             return own
         }
         guard peer.namespace == Namespaces.Peer.CloudUser else { return .empty }
-        let matches = await self.search(context: context, location: .peer(peerId: peer, fromId: peer, tags: .file,
+        let matches = await self.search(context: context, location: .peer(peerId: peer, fromId: peer, tags: nil,
             reactions: nil, threadId: nil, minDate: nil, maxDate: nil))
         var member = false
         for message in matches {
+            if message.author?.id == peer, VeilGramGiftMessage(message: message, account: context.account.peerId) != nil {
+                member = true
+                continue
+            }
             guard let file = self.exchangeFile(message, context: context) else { continue }
             if file.fileName == self.profileFile,
                let packet = await self.packet(context: context, message: message, file: file), let profile = packet.profile {
                 return profile
             }
-            if file.fileName == self.giftFile { member = true }
         }
         return PolusProfile(member: member)
     }
 
     private static func receivedGifts(context: AccountContext) async -> [String] {
         let matches = await self.search(context: context, location: .general(scope: .privateChats, groupId: nil,
-            tags: .file, minDate: nil, maxDate: nil, folderId: nil, communityId: nil))
+            tags: nil, minDate: nil, maxDate: nil, folderId: nil, communityId: nil))
         var gifts: [String] = []
         for message in matches {
-            guard let file = self.exchangeFile(message, context: context), file.fileName == self.giftFile,
-                  let packet = await self.packet(context: context, message: message, file: file),
-                  let gift = packet.gift else { continue }
-            gifts.append(gift)
+            guard message.author?.id == message.id.peerId,
+                  let delivery = VeilGramGiftMessage(message: message, account: context.account.peerId) else { continue }
+            if let gift = delivery.item {
+                gifts.append(gift)
+            } else if let file = delivery.legacyFile,
+                      let packet = await self.packet(context: context, message: message, file: file),
+                      let gift = packet.gift {
+                gifts.append(gift)
+            }
             if gifts.count == 6 { break }
         }
         return gifts
@@ -122,7 +140,6 @@ enum PolusTelegramExchange {
               message.forwardInfo == nil, message.minAutoremoveOrClearTimeout == nil else { return nil }
         return message.media.compactMap { $0 as? TelegramMediaFile }.first { file in
             guard let size = file.size, size > 4, file.mimeType == self.mimeType else { return false }
-            if file.fileName == self.giftFile { return size <= 2052 }
             return file.fileName == self.profileFile && size <= Int64(PolusProfileService.packetLimit)
         }
     }

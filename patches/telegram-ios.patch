@@ -274,10 +274,23 @@ index 39f51dc..416888b 100644
 +    }
 +}
 diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
-index 50540f7..97ba503 100644
+index 50540f7..575a44e 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
 +++ b/submodules/TelegramUI/Components/Chat/ChatMessageBubbleItemNode/Sources/ChatMessageBubbleItemNode.swift
-@@ -1612,7 +1612,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
+@@ -157,6 +157,12 @@ private func contentNodeMessagesAndClassesForItem(_ item: ChatMessageItem) -> ([
+             }
+         }
+         
++        if VeilGramGiftMessage(message: message, account: item.context.account.peerId) != nil {
++            result.append((message, VeilGramGiftBubble.self, itemAttributes,
++                BubbleItemAttributes(isAttachment: false, neighborType: .text, neighborSpacing: .default)))
++            continue outer
++        }
++
+         var messageMedia = message.media
+         if let updatingMedia = itemAttributes.updatingMedia, messageMedia.isEmpty, case let .update(media) = updatingMedia.media {
+             messageMedia.append(media.media)
+@@ -1612,7 +1618,7 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
          }
          replyRecognizer.shouldBegin = { [weak self, weak replyRecognizer] in
              if let strongSelf = self, let item = strongSelf.item {
@@ -286,7 +299,7 @@ index 50540f7..97ba503 100644
                      return false
                  }
                  // A drag the content claims for itself (a message widget's touch-action) is not a swipe.
-@@ -4423,6 +4423,9 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
+@@ -4423,6 +4429,9 @@ public class ChatMessageBubbleItemNode: ChatMessageItemView, ChatMessagePreviewI
          strongSelf.contentContainersWrapperNode.frame = CGRect(origin: CGPoint(), size: layout.contentSize)
          
          strongSelf.appliedItem = item
@@ -310,6 +323,18 @@ index bf71cb2..c7e5022 100644
      if timestamp == scheduleWhenOnlineTimestamp {
          dateText = "         "
      }
+diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageGiftBubbleContentNode/BUILD b/submodules/TelegramUI/Components/Chat/ChatMessageGiftBubbleContentNode/BUILD
+index ed9b47d..ef811e6 100644
+--- a/submodules/TelegramUI/Components/Chat/ChatMessageGiftBubbleContentNode/BUILD
++++ b/submodules/TelegramUI/Components/Chat/ChatMessageGiftBubbleContentNode/BUILD
+@@ -12,6 +12,7 @@ swift_library(
+     deps = [
+         "//submodules/AsyncDisplayKit",
+         "//submodules/Display",
++        "//submodules/ComponentFlow",
+         "//submodules/SSignalKit/SwiftSignalKit",
+         "//submodules/TelegramCore",
+         "//submodules/AccountContext",
 diff --git a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift b/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift
 index 7f64f67..15f3e0d 100644
 --- a/submodules/TelegramUI/Components/Chat/ChatMessageInteractiveFileNode/Sources/ChatMessageInteractiveFileNode.swift
@@ -1112,7 +1137,7 @@ index 7a4fcdf..d1aab75 100644
              items.append(.action(ContextMenuActionItem(text: strings.PeerInfo_Gifts_Context_AddToCollection, textLayout: .twoLinesMax, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Peer Info/Gifts/AddToCollection"), color: theme.contextMenu.primaryColor) }, action: { [weak self] c, f in
                  var subItems: [ContextMenuItem] = []
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
-index cf30428..d50a64f 100644
+index cf30428..9c80fc5 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
 +++ b/submodules/TelegramUI/Sources/AppDelegate.swift
 @@ -1,6 +1,7 @@
@@ -1136,10 +1161,10 @@ index cf30428..d50a64f 100644
 +        self.accessibilityElementsHidden = true
 +        self.label.text = "VeilGram"
 +        self.label.textAlignment = .center
-+        self.label.font = .systemFont(ofSize: 10, weight: .bold)
-+        self.label.textColor = .white
-+        self.label.backgroundColor = .black
-+        self.label.layer.cornerRadius = 8
++        self.label.font = .systemFont(ofSize: 13, weight: .heavy)
++        self.label.textColor = UIColor(white: 0.12, alpha: 1.0)
++        self.label.backgroundColor = UIColor(red: 1.0, green: 0.87, blue: 0.18, alpha: 1.0)
++        self.label.layer.cornerRadius = 11
 +        self.label.clipsToBounds = true
 +        self.addSubview(self.label)
 +    }
@@ -1151,8 +1176,8 @@ index cf30428..d50a64f 100644
 +        let top = self.window?.safeAreaInsets.top ?? 0
 +        let metrics = DeviceMetrics(screenSize: self.bounds.size, scale: self.traitCollection.displayScale,
 +            statusBarHeight: top, onScreenNavigationHeight: self.window?.safeAreaInsets.bottom)
-+        self.label.isHidden = !(metrics.hasDynamicIsland || top >= 57.0) || top < 40.0 || self.bounds.width >= self.bounds.height
-+        self.label.frame = CGRect(x: floor((self.bounds.width - 72) / 2.0), y: top - 17.0, width: 72, height: 15)
++        self.label.isHidden = !(metrics.showAppBadge || top >= 57.0) || top < 40.0 || self.bounds.width >= self.bounds.height
++        self.label.frame = CGRect(x: floor((self.bounds.width - 90) / 2.0), y: floor(top * 0.55 - 11.0), width: 90, height: 22)
 +    }
 +
 +    override func safeAreaInsetsDidChange() {
