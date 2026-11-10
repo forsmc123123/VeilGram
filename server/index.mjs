@@ -9,63 +9,29 @@ const catalog = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.ur
 const bannerIds = new Set(catalog.banners.map(({ id }) => id));
 const giftIds = new Set(catalog.gifts.map(({ id }) => id));
 const validPeer = (peer) => typeof peer === 'string' && /^[1-9][0-9]{0,15}$/.test(peer);
-const mediaLimit = 8 * 1024 * 1024;
-const contentTypes = { photo: 'image/jpeg', gif: 'image/gif', video: 'video/mp4' };
-const validMediaId = (value) => typeof value === 'string' && /^[a-f0-9]{64}$/.test(value);
 
 function reply(response, status, value) {
   response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8', 'Cache-Control': 'no-store' });
   response.end(JSON.stringify(value));
 }
 
-async function readBytes(request, limit) {
+async function readBody(request) {
   const chunks = [];
   let size = 0;
-  for await (const chunk of request.iterator({ destroyOnReturn: false })) {
+  for await (const chunk of request) {
     size += chunk.length;
-    if (size > limit) {
-      request.resume();
-      return null;
-    }
+    if (size > 2048) return null;
     chunks.push(chunk);
   }
-  return Buffer.concat(chunks);
-}
-
-async function readBody(request) {
   try {
-    const bytes = await readBytes(request, 2048);
-    return bytes && JSON.parse(bytes.toString('utf8'));
+    return JSON.parse(Buffer.concat(chunks).toString('utf8'));
   } catch {
     return null;
   }
 }
 
-function readStyle(input) {
-  const { banner = null, media = null, color = null, status = null } = input ?? {};
-  if (banner !== null && !bannerIds.has(banner)) return;
-  if (media !== null && (!validMediaId(media?.id) || !Object.hasOwn(contentTypes, media?.kind))) return;
-  if (color !== null && (typeof color !== 'string' || !/^[A-F0-9]{6}$/.test(color))) return;
-  if (status !== null && (typeof status !== 'string' || Array.from(status).length > 32 ||
-      /[\p{Cc}\u202a-\u202e\u2066-\u2069]/u.test(status))) return;
-  return { banner: media ? null : banner, media: media && { id: media.id, kind: media.kind }, color, status };
-}
-
-function validMedia(kind, data) {
-  if (!data || data.length < 12) return false;
-  if (kind === 'photo') return data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
-  if (kind === 'gif') return ['GIF89a', 'GIF87a'].includes(data.toString('ascii', 0, 6));
-  return data.toString('ascii', 4, 8) === 'ftyp';
-}
-
-function giftCost(item) {
-  if (typeof item !== 'string') return;
-  if (/^gift:[1-9][0-9]{0,18}$/.test(item)) return 25;
-  if (/^nft:[A-Za-z0-9]{1,60}-[1-9][0-9]{0,11}$/.test(item)) return 100;
-}
-
 export function profileServer(store, botUsername) {
-  return createServer({ requestTimeout: 60_000, headersTimeout: 5_000 }, async (request, response) => {
+  return createServer({ requestTimeout: 10_000, headersTimeout: 5_000 }, async (request, response) => {
     const { method, url } = request;
     try {
       if (method === 'GET' && url === '/v1/catalog') {
@@ -81,56 +47,12 @@ export function profileServer(store, botUsername) {
       }
       const peerRoute = /^\/v1\/profiles\/([1-9][0-9]{0,15})$/.exec(url);
       const isSave = method === 'PUT' && url === '/v1/me';
-      if (!(method === 'GET' && peerRoute) && !isSave && !url.startsWith('/v2/')) {
+      if (!(method === 'GET' && peerRoute) && !isSave) {
         return reply(response, 404, { error: 'not_found' });
       }
       const bearer = /^Bearer ([\w-]{43})$/.exec(request.headers.authorization ?? '');
       const owner = bearer && store.authenticatedPeer(bearer[1]);
       if (!owner) return reply(response, 401, { error: 'authentication_required' });
-      if (url.startsWith('/v2/')) {
-        const profileRoute = /^\/v2\/profiles\/([1-9][0-9]{0,15})$/.exec(url);
-        const mediaRoute = /^\/v2\/media\/([1-9][0-9]{0,15})\/([a-f0-9]{64})$/.exec(url);
-        const uploadRoute = /^\/v2\/me\/media\/(photo|gif|video)$/.exec(url);
-        if (method === 'GET' && profileRoute) {
-          return reply(response, 200, store.getSharedProfile(profileRoute[1], owner));
-        }
-        if (method === 'PUT' && url === '/v2/me') {
-          const input = await readBody(request);
-          const style = input && typeof input === 'object' && !Array.isArray(input) && readStyle(input);
-          if (!style || !store.saveStyle(owner, style)) return reply(response, 400, { error: 'invalid_style' });
-          return reply(response, 200, store.getSharedProfile(owner, owner));
-        }
-        if (method === 'POST' && uploadRoute) {
-          const kind = uploadRoute[1];
-          if (request.headers['content-type'] !== contentTypes[kind] ||
-              Number(request.headers['content-length'] ?? 0) > mediaLimit) {
-            return reply(response, 400, { error: 'invalid_media' });
-          }
-          const bytes = await readBytes(request, mediaLimit);
-          if (!validMedia(kind, bytes)) return reply(response, 400, { error: 'invalid_media' });
-          return reply(response, 200, store.uploadMedia(owner, kind, bytes));
-        }
-        if (method === 'GET' && mediaRoute) {
-          const media = store.getMedia(mediaRoute[1], mediaRoute[2], owner);
-          if (!media) return reply(response, 404, { error: 'not_found' });
-          response.writeHead(200, {
-            'Content-Type': contentTypes[media.kind], 'Content-Length': media.data.byteLength,
-            'X-Content-Type-Options': 'nosniff', 'Cache-Control': 'private, no-store'
-          });
-          return response.end(media.data);
-        }
-        if (method === 'POST' && url === '/v2/gifts') {
-          const { recipient, nonce, item } = await readBody(request) ?? {};
-          const cost = giftCost(item);
-          if (!cost || !validPeer(recipient) || recipient === owner ||
-              typeof nonce !== 'string' || !/^[a-f0-9-]{36}$/.test(nonce)) {
-            return reply(response, 400, { error: 'invalid_gift' });
-          }
-          const result = store.sendGift(owner, recipient, nonce, item, cost);
-          return reply(response, result.error ? 409 : 200, result);
-        }
-        return reply(response, 404, { error: 'not_found' });
-      }
       if (isSave) {
         const { banner, gifts } = await readBody(request) ?? {};
         if ((banner !== null && !bannerIds.has(banner)) || !Array.isArray(gifts) ||

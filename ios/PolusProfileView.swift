@@ -12,6 +12,7 @@ final class PolusProfilePanel: UIView {
     private let stack = UIStackView()
     private(set) var preferredHeight: CGFloat = 0
     var action: (() -> Void)?
+    var share: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -67,6 +68,15 @@ final class PolusProfilePanel: UIView {
             button.addTarget(self, action: #selector(self.performAction), for: .touchUpInside)
             self.append(button, height: 44)
         }
+        if canGift {
+            var config = UIButton.Configuration.gray()
+            config.title = "Отправить свой профиль VeilGram"
+            config.image = UIImage(systemName: "paperplane")
+            config.imagePadding = 8
+            let button = UIButton(configuration: config)
+            button.addTarget(self, action: #selector(self.shareProfile), for: .touchUpInside)
+            self.append(button, height: 44)
+        }
     }
 
     private func append(_ view: UIView, height: CGFloat) {
@@ -77,23 +87,25 @@ final class PolusProfilePanel: UIView {
     }
 
     @objc private func performAction() { self.action?() }
+    @objc private func shareProfile() { self.share?() }
 }
 
 final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
     private let account: String
+    private let balance: Int
     private var profile: PolusProfile
     private let didSave: (PolusProfile) -> Void
     private var busy = false
-    private var hasEditedSelection = false
     private let banners = PolusProfileService.catalog.banners
     private let colors: [(title: String, hex: String?)] = [
         ("По умолчанию", nil), ("Сирень", "C4A7FF"), ("Небо", "78C8FF"),
         ("Мята", "7EE3C4"), ("Роза", "FF9CC4"), ("Золото", "FFCD78")
     ]
 
-    init(account: String, profile: PolusProfile, didSave: @escaping (PolusProfile) -> Void) {
+    init(account: String, profile: PolusProfile, balance: Int, didSave: @escaping (PolusProfile) -> Void) {
         self.account = account
         self.profile = profile
+        self.balance = balance
         self.didSave = didSave
         super.init(style: .insetGrouped)
     }
@@ -107,14 +119,13 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сохранить", style: .done, target: self, action: #selector(self.save))
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 4 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
         case 0: return self.banners.count + 3
         case 1: return self.colors.count + 1
-        case 2: return 1
-        default: return PolusProfileService.canSync && !PolusProfileService.isLinked(self.account) ? 3 : 1
+        default: return 1
         }
     }
 
@@ -122,20 +133,14 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         switch section {
         case 0: return "Рамка вокруг аватарки"
         case 1: return "Цвет имени и статус"
-        case 2: return "Визуальные звёзды"
-        default: return "Общий профиль"
+        default: return "Визуальные звёзды"
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
         case 0: return "Фото и видео можно выбрать из медиатеки. Для оригинального GIF используй «Файлы»."
-        case 2: return "Открой профиль участника VeilGram, чтобы подарить ему визуальную копию подарка Telegram."
-        case 3:
-            if PolusProfileService.isLinked(self.account) {
-                return "Сохрани оформление, чтобы его увидели другие подключённые участники VeilGram."
-            }
-            return "Для общего профиля укажи адрес сервера VeilGram и подключи свой Telegram-аккаунт через бота."
+        case 2: return "Баланс хранится на этом iPhone. Открой профиль человека, чтобы поделиться оформлением или отправить визуальный подарок в его личный чат."
         default: return nil
         }
     }
@@ -166,16 +171,9 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
             cell.imageView?.image = color.hex.map { _ in UIImage(systemName: "circle.fill") } ?? nil
             cell.imageView?.tintColor = color.hex.map(polusColor)
             cell.accessoryType = self.profile.color == color.hex ? .checkmark : .none
-        case (2, _):
-            cell.selectionStyle = .none
-            cell.textLabel?.text = self.profile.balance.map { "\($0) ✦ VeilGram" } ?? "Доступны после подключения профиля"
-        case (3, 0):
-            cell.textLabel?.text = "Сервер VeilGram"
-            cell.detailTextLabel?.text = PolusProfileService.canSync ? PolusProfileService.originText : "Адрес не указан"
-            cell.accessoryType = .disclosureIndicator
         default:
-            cell.textLabel?.text = indexPath.row == 1 ? "Открыть бота" : "Ввести код"
-            cell.textLabel?.textColor = self.view.tintColor
+            cell.selectionStyle = .none
+            cell.textLabel?.text = "\(self.balance) ✦ VeilGram"
         }
         return cell
     }
@@ -211,50 +209,14 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
                     return
                 }
                 self.profile.status = clean.isEmpty ? nil : clean
-                self.hasEditedSelection = true
                 self.tableView.reloadData()
             }
             return
         case (1, let row):
             self.profile.color = self.colors[row - 1].hex
-        case (3, 0):
-            self.textInput(title: "HTTPS-адрес сервера VeilGram", value: PolusProfileService.originText, keyboard: .URL) { text in
-                guard PolusProfileService.configureOrigin(text) else {
-                    self.showMessage("Укажи HTTPS-адрес сервера без пути.")
-                    return
-                }
-                self.profile.member = nil
-                self.profile.balance = nil
-                self.profile.received = nil
-                self.tableView.reloadData()
-            }
-            return
-        case (3, 1):
-            self.perform {
-                let url = try await PolusProfileService.botURL()
-                UIApplication.shared.open(url, options: [:], completionHandler: nil)
-            }
-            return
-        case (3, 2):
-            self.textInput(title: "Код из бота", value: nil, keyboard: .asciiCapable) { code in
-                self.perform {
-                    try await PolusProfileService.link(self.account, code: code)
-                    let shared = try await PolusProfileService.load(account: self.account, peer: self.account)
-                    if self.hasEditedSelection {
-                        self.profile.member = shared.member
-                        self.profile.balance = shared.balance
-                        self.profile.received = shared.received
-                    } else {
-                        self.profile = shared
-                    }
-                    self.tableView.reloadData()
-                }
-            }
-            return
         default:
             return
         }
-        self.hasEditedSelection = true
         self.tableView.reloadData()
     }
 
@@ -295,19 +257,13 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     private func importFrame(_ url: URL) async throws {
         self.profile.media = try await PolusFrameImport.prepare(url, account: self.account)
         self.profile.banner = nil
-        self.hasEditedSelection = true
         self.tableView.reloadData()
     }
 
-    private func textInput(title: String, value: String?, keyboard: UIKeyboardType = .default, completion: @escaping (String) -> Void) {
+    private func textInput(title: String, value: String?, completion: @escaping (String) -> Void) {
         let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
         alert.addTextField { field in
             field.text = value
-            field.keyboardType = keyboard
-            if keyboard != .default {
-                field.autocapitalizationType = .none
-                field.autocorrectionType = .no
-            }
         }
         alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         alert.addAction(UIAlertAction(title: "Готово", style: .default) { [weak alert] _ in
@@ -317,11 +273,10 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     }
 
     @objc private func save() {
-        self.perform {
-            let profile = try await PolusProfileService.save(account: self.account, profile: self.profile)
-            self.didSave(profile)
-            self.dismiss(animated: true)
-        }
+        guard !self.busy else { return }
+        PolusProfileService.save(account: self.account, profile: self.profile)
+        self.didSave(self.profile)
+        self.dismiss(animated: true)
     }
 
     @objc private func close() { self.dismiss(animated: true) }

@@ -502,14 +502,15 @@ index 3bba777..abd7c8d 100644
                      noDelay: false,
                      animateScale: true,
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
-index bd33bb7..ac41890 100644
+index bd33bb7..3682452 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
-@@ -171,6 +171,7 @@ swift_library(
+@@ -171,6 +171,8 @@ swift_library(
          "//submodules/TelegramUI/Components/CameraScreen",
          "//submodules/TelegramUI/Components/PeerInfo/VerifyAlertController",
          "//submodules/TelegramUI/Components/Gifts/GiftViewScreen",
 +        "//submodules/TelegramUI/Components/Gifts/GiftItemComponent",
++        "//submodules/Postbox",
          "//submodules/TelegramUI/Components/BatchVideoRendering",
          "//submodules/TelegramUI/Components/GifVideoLayer",
          "//submodules/Components/HierarchyTrackingLayer",
@@ -614,21 +615,22 @@ index 7751e79..69d08a9 100644
          if self.isAvatarExpanded != isAvatarExpanded {
              self.isAvatarExpanded = isAvatarExpanded
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-index 463ab66..d8c8e6e 100644
+index 463ab66..cc4d32c 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-@@ -265,6 +265,10 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -265,6 +265,11 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
      let edgeEffectView: EdgeEffectView
      
      let headerNode: PeerInfoHeaderNode
 +    private var polusProfile = PolusProfile.empty
 +    private var polusPanel: PolusProfilePanel?
 +    private var polusPanelNode: ASDisplayNode?
-+    private var polusProfileWasEdited = false
++    private var polusLoading = false
++    private var polusSharing = false
      var underHeaderContentsAlpha: CGFloat = 1.0
      var regularSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
      var editingSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
-@@ -1715,6 +1719,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -1715,6 +1720,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              }
          }
          
@@ -637,7 +639,17 @@ index 463ab66..d8c8e6e 100644
          self.performNavigationButtonAction = { [weak self] key, source, gesture in
              guard let strongSelf = self else {
                  return
-@@ -4687,6 +4693,55 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -2865,6 +2872,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             }
+         }
+         self.data = data
++        if self.polusPanel != nil, previousData?.peer == nil {
++            self.updatePolusPanel()
++        }
+         if previousData?.members?.membersContext !== data.members?.membersContext {
+             if let peer = data.peer, let _ = data.members {
+                 self.groupMembersSearchContext = GroupMembersSearchContext(context: self.context, peerId: peer.id)
+@@ -4687,6 +4697,99 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -654,46 +666,90 @@ index 463ab66..d8c8e6e 100644
 +
 +        if canEdit {
 +            self.polusProfile = PolusProfileService.localProfile(account)
++            self.polusProfile.member = true
 +            panel.action = { [weak self] in
 +                guard let self, let controller = self.controller else { return }
-+                let editor = PolusProfileEditor(account: account, profile: self.polusProfile) { [weak self] profile in
-+                    self?.polusProfileWasEdited = true
++                let editor = PolusProfileEditor(account: account, profile: self.polusProfile, balance: PolusTelegramExchange.balance(self.context)) { [weak self] profile in
 +                    self?.applyPolusProfile(profile, account: account, peer: peer)
 +                }
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
 +        } else {
 +            panel.action = { [weak self] in
-+                guard let self, let controller = self.controller else { return }
-+                let picker = PolusGiftPicker(context: self.context, account: account, recipient: peer) { [weak self] in
-+                    Task { @MainActor [weak self] in
-+                        guard let self, let profile = try? await PolusProfileService.load(account: account, peer: peer) else { return }
-+                        self.applyPolusProfile(profile, account: account, peer: peer)
-+                    }
++                guard let self, self.canExchangePolusProfile, let controller = self.controller else { return }
++                let picker = PolusGiftPicker(context: self.context, recipient: self.peerId) { [weak self] in
++                    self?.showPolusMessage("Подарок добавлен в очередь отправки Telegram.")
 +                }
 +                controller.present(UINavigationController(rootViewController: picker), animated: true, completion: nil)
 +            }
++            panel.share = { [weak self] in self?.sharePolusProfile() }
 +        }
 +        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
++    }
++
++    func refreshPolusProfile() {
++        guard self.polusPanel != nil, !self.polusLoading else { return }
++        self.polusLoading = true
 +        Task { @MainActor [weak self] in
-+            guard let profile = try? await PolusProfileService.load(account: account, peer: peer),
-+                  let self, !self.polusProfileWasEdited else { return }
-+            self.applyPolusProfile(profile, account: account, peer: peer)
++            guard let self else { return }
++            defer { self.polusLoading = false }
++            let profile = await PolusTelegramExchange.load(context: self.context, peer: self.peerId)
++            self.applyPolusProfile(profile, account: String(self.context.account.peerId.id._internalGetInt64Value()),
++                peer: String(self.peerId.id._internalGetInt64Value()))
 +        }
++    }
++
++    private var canExchangePolusProfile: Bool {
++        if case let .user(user) = self.data?.peer {
++            return user.botInfo == nil && self.peerId != self.context.account.peerId
++        }
++        return false
++    }
++
++    private func sharePolusProfile() {
++        guard self.canExchangePolusProfile, !self.polusSharing, let controller = self.controller else { return }
++        let alert = UIAlertController(title: "Отправить профиль VeilGram?", message: "Рамка, цвет имени, статус и витрина подарков будут отправлены файлом в личный чат.", preferredStyle: .alert)
++        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
++        alert.addAction(UIAlertAction(title: "Отправить", style: .default) { [weak self] _ in
++            guard let self, !self.polusSharing else { return }
++            self.polusSharing = true
++            Task { @MainActor [weak self] in
++                guard let self else { return }
++                defer { self.polusSharing = false }
++                do {
++                    try await PolusTelegramExchange.shareProfile(context: self.context, peer: self.peerId)
++                    self.showPolusMessage("Профиль добавлен в очередь отправки Telegram.")
++                } catch {
++                    self.showPolusMessage(error.localizedDescription)
++                }
++            }
++        })
++        controller.present(alert, animated: true, completion: nil)
++    }
++
++    private func showPolusMessage(_ text: String) {
++        let alert = UIAlertController(title: "VeilGram", message: text, preferredStyle: .alert)
++        alert.addAction(UIAlertAction(title: "ОК", style: .default))
++        self.controller?.present(alert, animated: true, completion: nil)
++    }
++
++    private func updatePolusPanel() {
++        guard let panel = self.polusPanel else { return }
++        panel.update(context: self.context, profile: self.polusProfile,
++            canEdit: self.peerId == self.context.account.peerId, canGift: self.canExchangePolusProfile)
++        self.requestLayout()
 +    }
 +
 +    private func applyPolusProfile(_ profile: PolusProfile, account: String, peer: String) {
 +        self.polusProfile = profile
 +        self.headerNode.applyPolusProfile(profile, account: account, peer: peer)
-+        self.polusPanel?.update(context: self.context, profile: profile, canEdit: account == peer,
-+            canGift: account != peer && profile.member == true && PolusProfileService.isLinked(account))
-+        self.requestLayout()
++        self.updatePolusPanel()
 +    }
 +
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5796,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5844,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -711,6 +767,14 @@ index 463ab66..d8c8e6e 100644
                
              var isFirst = true
              for (sectionId, sectionItems) in items {
+@@ -7303,6 +7417,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
+         }
+         
+         self.controllerNode.refreshHasPersonalChannelsIfNeeded()
++        self.controllerNode.refreshPolusProfile()
+         self.controllerNode.initialExpandPanes = false
+         
+         if self.isSettings {
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
 index cf30428..4d53d8e 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
@@ -809,20 +873,19 @@ index cf30428..4d53d8e 100644
                  return icons
              } else {
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
-index f32b3c1..3e604b8 100644
+index f32b3c1..4cc5ad0 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift
 +++ b/submodules/TelegramUI/Sources/ChatController.swift
-@@ -7813,6 +7813,16 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
+@@ -7813,6 +7813,15 @@ public final class ChatControllerImpl: TelegramBaseController, ChatController, G
          super.viewWillAppear(animated)
          self.forwardSideListAppearance(.willAppear, animated: animated)
  
 +        if case .peer = self.chatLocation, let peerId = self.chatLocation.peerId,
 +           peerId.namespace == Namespaces.Peer.CloudUser, peerId != self.context.account.peerId {
-+            let account = String(self.context.account.peerId.id._internalGetInt64Value())
-+            let peer = String(peerId.id._internalGetInt64Value())
 +            Task { @MainActor [weak self] in
-+                let decoration = await VeilGramChatDecoration.load(account: account, peer: peer)
-+                self?.chatTitleView?.setVeilGramDecoration(member: decoration.member, color: decoration.color)
++                guard let self else { return }
++                let decoration = await VeilGramChatDecoration.load(context: self.context, peer: peerId)
++                self.chatTitleView?.setVeilGramDecoration(member: decoration.member, color: decoration.color)
 +            }
 +        }
 +

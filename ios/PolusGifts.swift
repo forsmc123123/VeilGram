@@ -2,6 +2,7 @@ import UIKit
 import AccountContext
 import ComponentFlow
 import GiftItemComponent
+import Postbox
 import SwiftSignalKit
 import TelegramCore
 
@@ -105,20 +106,16 @@ final class PolusGiftTile: UIView {
 
 final class PolusGiftPicker: UITableViewController {
     private let context: AccountContext
-    private let account: String
-    private let recipient: String
+    private let recipient: PeerId
     private let didSend: () -> Void
     private let catalogLoad = MetaDisposable()
     private let collectibleLoad = MetaDisposable()
     private var gifts: [StarGift] = []
     private var collectible: StarGift?
-    private var balance: Int?
     private var busy = false
-    private var pending: (item: String, nonce: UUID)?
 
-    init(context: AccountContext, account: String, recipient: String, didSend: @escaping () -> Void) {
+    init(context: AccountContext, recipient: PeerId, didSend: @escaping () -> Void) {
         self.context = context
-        self.account = account
         self.recipient = recipient
         self.didSend = didSend
         super.init(style: .insetGrouped)
@@ -135,15 +132,6 @@ final class PolusGiftPicker: UITableViewController {
             self.gifts = gifts.filter { if case .generic = $0 { return true }; return false }
             self.tableView.reloadData()
         }))
-        Task { @MainActor [weak self] in
-            guard let self else { return }
-            do {
-                self.balance = try await PolusProfileService.load(account: self.account, peer: self.account).balance
-            } catch {
-                self.message(error.localizedDescription)
-            }
-            self.tableView.reloadData()
-        }
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { 2 }
@@ -153,12 +141,12 @@ final class PolusGiftPicker: UITableViewController {
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
-        if section == 0 { return self.balance.map { "Баланс VeilGram · \($0) ✦" } ?? "Баланс VeilGram" }
+        if section == 0 { return "Баланс VeilGram · \(PolusTelegramExchange.balance(self.context)) ✦" }
         return self.gifts.isEmpty ? "Загружаем каталог Telegram…" : "Каталог Telegram"
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        section == 0 ? "Подарки видны в VeilGram. Оплата идёт визуальными звёздами VeilGram." : nil
+        section == 0 ? "Подарок придёт файлом в личный чат. VeilGram покажет его в профиле получателя." : nil
     }
 
     private func gift(at indexPath: IndexPath) -> StarGift? {
@@ -225,12 +213,11 @@ final class PolusGiftPicker: UITableViewController {
     }
 
     private func confirm(_ gift: StarGift) {
-        guard let balance = self.balance else { return }
-        guard balance >= gift.polusCost || self.pending?.item == gift.polusID else {
+        guard PolusTelegramExchange.balance(self.context) >= gift.polusCost else {
             self.message("Не хватает визуальных звёзд VeilGram.")
             return
         }
-        let alert = UIAlertController(title: gift.polusTitle, message: "Подарить за \(gift.polusCost) визуальных звёзд VeilGram?", preferredStyle: .alert)
+        let alert = UIAlertController(title: gift.polusTitle, message: "Отправить в личный чат за \(gift.polusCost) визуальных звёзд VeilGram?", preferredStyle: .alert)
         alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
         alert.addAction(UIAlertAction(title: "Подарить", style: .default) { [weak self] _ in self?.send(gift) })
         self.present(alert, animated: true)
@@ -238,9 +225,6 @@ final class PolusGiftPicker: UITableViewController {
 
     private func send(_ gift: StarGift) {
         guard !self.busy else { return }
-        let item = gift.polusID
-        let nonce = self.pending.flatMap { $0.item == item ? $0.nonce : nil } ?? UUID()
-        self.pending = (item, nonce)
         self.busy = true
         self.isModalInPresentation = true
         self.navigationItem.leftBarButtonItem?.isEnabled = false
@@ -252,10 +236,8 @@ final class PolusGiftPicker: UITableViewController {
                 self.navigationItem.leftBarButtonItem?.isEnabled = true
             }
             do {
-                self.balance = try await PolusProfileService.sendGift(account: self.account, recipient: self.recipient, item: item, nonce: nonce)
-                self.pending = nil
-                self.didSend()
-                self.dismiss(animated: true)
+                try await PolusTelegramExchange.sendGift(context: self.context, peer: self.recipient, item: gift.polusID, title: gift.polusTitle)
+                self.dismiss(animated: true, completion: self.didSend)
             } catch {
                 self.message(error.localizedDescription)
             }
