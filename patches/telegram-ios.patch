@@ -35,6 +35,73 @@ index 1ac8279..825d81b 100644
      <key>CFBundlePackageType</key>
      <string>APPL</string>
      <key>CFBundleSignature</key>
+diff --git a/submodules/ContactListUI/Sources/ContactsController.swift b/submodules/ContactListUI/Sources/ContactsController.swift
+index ca05505..24628ed 100644
+--- a/submodules/ContactListUI/Sources/ContactsController.swift
++++ b/submodules/ContactListUI/Sources/ContactsController.swift
+@@ -42,6 +42,7 @@ private final class HeaderContextReferenceContentSource: ContextReferenceContent
+ 
+ public class ContactsController: ViewController {
+     private let context: AccountContext
++    let isTab: Bool
+     
+     /// The contact list draws its own header (no Display bar); it takes part in navigation transitions itself.
+     override public var navigationBarTransitionSource: NavigationBarTransitionSource? {
+@@ -80,10 +81,9 @@ public class ContactsController: ViewController {
+     private var hasAppeared = false
+     private var appearActions: [(ContactsController) -> Void] = []
+     
+-    /// The Contacts screen, pushed over Settings (Settings ▸ Contacts, `tg://contacts`): the header has a back button,
+-    /// Sort and Add.
+-    public init(context: AccountContext) {
++    public init(context: AccountContext, isTab: Bool = false) {
+         self.context = context
++        self.isTab = isTab
+         
+         self.presentationData = context.sharedContext.currentPresentationData.with { $0 }
+         
+@@ -92,6 +92,12 @@ public class ContactsController: ViewController {
+         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
+         
+         self.title = self.presentationData.strings.Contacts_Title
++        if isTab {
++            let icon = UIImage(bundleImageName: "Chat List/Tabs/IconContacts")
++            self.tabBarItem.title = self.presentationData.strings.Contacts_Title
++            self.tabBarItem.image = icon
++            self.tabBarItem.selectedImage = icon
++        }
+         
+         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
+         
+@@ -137,6 +143,9 @@ public class ContactsController: ViewController {
+         self.statusBar.statusBarStyle = self.presentationData.theme.rootController.statusBarStyle.style
+         
+         self.title = self.presentationData.strings.Contacts_Title
++        if self.isTab {
++            self.tabBarItem.title = self.presentationData.strings.Contacts_Title
++        }
+         self.navigationItem.backBarButtonItem = UIBarButtonItem(title: self.presentationData.strings.Common_Back, style: .plain, target: nil, action: nil)
+     }
+     
+diff --git a/submodules/ContactListUI/Sources/ContactsControllerNode.swift b/submodules/ContactListUI/Sources/ContactsControllerNode.swift
+index c3965b2..094d149 100644
+--- a/submodules/ContactListUI/Sources/ContactsControllerNode.swift
++++ b/submodules/ContactListUI/Sources/ContactsControllerNode.swift
+@@ -341,13 +341,11 @@ final class ContactsControllerNode: ASDisplayNode, ASGestureRecognizerDelegate {
+                     self.controller?.addPressed()
+                 }
+             )
+-            // The left is the back button's: Sort stands on the right, its own capsule beside Add.
+             leftButton = nil
+             rightButtons = [sortButton, addButton]
+         }
+         
+-        // Pushed (from Settings) the header has a back button.
+-        let backPressed: (() -> Void)? = { [weak self] in
++        let backPressed: (() -> Void)? = self.controller?.isTab == true ? nil : { [weak self] in
+             self?.controller?.navigationController?.popViewController(animated: true)
+         }
+         let primaryContent = ChatListHeaderComponent.Content(
 diff --git a/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift b/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift
 index 243b622..ce21248 100644
 --- a/submodules/Media/LocalAudioTranscription/Sources/LocalAudioTranscription.swift
@@ -214,6 +281,71 @@ index f74a40b..b1eae9a 100644
      
      let cloudThemes = Promise<[TelegramTheme]>()
      let updatedCloudThemes = context.engine.themes.themes(accountManager: context.sharedContext.accountManager)
+diff --git a/submodules/TabBarUI/Sources/TabBarContollerNode.swift b/submodules/TabBarUI/Sources/TabBarContollerNode.swift
+index 38b8937..234c567 100644
+--- a/submodules/TabBarUI/Sources/TabBarContollerNode.swift
++++ b/submodules/TabBarUI/Sources/TabBarContollerNode.swift
+@@ -68,6 +68,7 @@ final class TabBarControllerNode: ASDisplayNode {
+     private let disabledPressed: () -> Void
+     private let activateSearch: () -> Void
+     private let deactivateSearch: () -> Void
++    var hasRootSearch = false
+     
+     private(set) var tabBarItems: [TabBarNodeItem] = []
+     private(set) var selectedIndex: Int = 0
+@@ -316,7 +317,7 @@ final class TabBarControllerNode: ASDisplayNode {
+                         }
+                     )
+                 },
+-                search: sidePlacement != nil ? nil : self.currentController?.tabBarSearchState.flatMap { tabBarSearchState in
++                search: sidePlacement != nil ? nil : (self.currentController?.tabBarSearchState ?? (self.hasRootSearch ? ViewController.TabBarSearchState(isActive: false) : nil)).map { tabBarSearchState in
+                     return TabBarComponent.Search(
+                         isActive: tabBarSearchState.isActive,
+                         activate: { [weak self] in
+diff --git a/submodules/TabBarUI/Sources/TabBarController.swift b/submodules/TabBarUI/Sources/TabBarController.swift
+index 0868596..425ea8d 100644
+--- a/submodules/TabBarUI/Sources/TabBarController.swift
++++ b/submodules/TabBarUI/Sources/TabBarController.swift
+@@ -60,6 +60,7 @@ open class TabBarControllerImpl: ViewController, TabBarController {
+     }
+     
+     public private(set) var controllers: [ViewController] = []
++    private let rootSearchAction: (() -> Void)?
+     
+     private let _ready = Promise<Bool>()
+     override open var ready: Promise<Bool> {
+@@ -103,9 +104,10 @@ open class TabBarControllerImpl: ViewController, TabBarController {
+     private var theme: PresentationTheme
+     private var strings: PresentationStrings
+     
+-    public init(theme: PresentationTheme, strings: PresentationStrings) {
++    public init(theme: PresentationTheme, strings: PresentationStrings, rootSearchAction: (() -> Void)? = nil) {
+         self.theme = theme
+         self.strings = strings
++        self.rootSearchAction = rootSearchAction
+         
+         super.init(navigationBarPresentationData: nil)
+         
+@@ -270,13 +272,18 @@ open class TabBarControllerImpl: ViewController, TabBarController {
+             guard let self else {
+                 return
+             }
+-            self.currentController?.tabBarActivateSearch()
++            if self.currentController?.tabBarSearchState == nil, let rootSearchAction = self.rootSearchAction {
++                rootSearchAction()
++            } else {
++                self.currentController?.tabBarActivateSearch()
++            }
+         }, deactivateSearch: { [weak self] in
+             guard let self else {
+                 return
+             }
+             self.currentController?.tabBarDeactivateSearch()
+         })
++        self.tabBarControllerNode.hasRootSearch = self.rootSearchAction != nil
+         
+         self.updateSelectedIndex()
+         self.displayNodeDidLoad()
 diff --git a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift b/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
 index cf1ab15..0534d98 100644
 --- a/submodules/TelegramCore/Sources/State/Sync/StateReplay+Messages.swift
@@ -1266,3 +1398,81 @@ index f32b3c1..4cc5ad0 100644
          self.walletTransferAnimationsVisible = true
          self.chatDisplayNode.historyNode.forEachVisibleMessageItemNode { itemNode in
              itemNode.unreadMessageRangeUpdated()
+diff --git a/submodules/TelegramUI/Sources/TelegramRootController.swift b/submodules/TelegramUI/Sources/TelegramRootController.swift
+index 6a07129..b26d941 100644
+--- a/submodules/TelegramUI/Sources/TelegramRootController.swift
++++ b/submodules/TelegramUI/Sources/TelegramRootController.swift
+@@ -79,7 +79,6 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+     
+     public var rootTabController: TabBarController?
+     
+-    /// The Contacts screen `openContacts()` pushed; `getContactsController()` returns it while it is open.
+     private weak var contactsController: ContactsController?
+     public var callListController: CallListController?
+     public var chatListController: ChatListController?
+@@ -201,8 +200,11 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+     }
+     
+     public func addRootControllers(showCallsTab: Bool, showNewsTab: Bool) {
+-        let tabBarController = TabBarControllerImpl(theme: self.presentationData.theme, strings: self.presentationData.strings)
++        let tabBarController = TabBarControllerImpl(theme: self.presentationData.theme, strings: self.presentationData.strings, rootSearchAction: { [weak self] in
++            self?.openChatsController(activateSearch: true)
++        })
+         tabBarController.navigationPresentation = .master
++        let contactsController = ContactsController(context: self.context, isTab: true)
+         let chatListController = self.context.sharedContext.makeChatListController(context: self.context, location: .chatList(groupId: .root), controlsHistoryPreload: true, hideNetworkActivityStatus: false, previewing: false, enableDebugActions: !GlobalExperimentalSettings.isAppStoreBuild)
+         if let sharedContext = self.context.sharedContext as? SharedAccountContextImpl {
+             chatListController.tabBarItem.badgeValue = sharedContext.switchingData.chatListBadge
+@@ -212,7 +214,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+         // Created even when hidden, like the calls tab: `updateRootControllers` shows and hides it.
+         let newsController = NewsScreen(context: self.context)
+         
+-        var controllers: [ViewController] = []
++        var controllers: [ViewController] = [contactsController]
+         
+         if showCallsTab {
+             controllers.append(callListController)
+@@ -244,6 +246,7 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+         let chatsIndex = controllers.firstIndex(where: { $0 === chatListController }) ?? 0
+         tabBarController.setControllers(controllers, selectedIndex: restoreSettignsController != nil ? (controllers.count - 1) : chatsIndex)
+         
++        self.contactsController = contactsController
+         self.callListController = callListController
+         self.newsController = newsController
+         self.chatListController = chatListController
+@@ -253,10 +256,10 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+     }
+         
+     public func updateRootControllers(showCallsTab: Bool, showNewsTab: Bool) {
+-        guard let rootTabController = self.rootTabController as? TabBarControllerImpl else {
++        guard let rootTabController = self.rootTabController as? TabBarControllerImpl, let contactsController = self.contactsController else {
+             return
+         }
+-        var controllers: [ViewController] = []
++        var controllers: [ViewController] = [contactsController]
+         if showCallsTab {
+             controllers.append(self.callListController!)
+         }
+@@ -906,7 +909,6 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+         }
+     }
+     
+-    /// Contacts has no tab: the Settings tab, with the screen Settings ▸ Contacts pushes over it.
+     public func openContacts() {
+         guard let rootTabController = self.rootTabController else {
+             return
+@@ -914,13 +916,9 @@ public final class TelegramRootController: NavigationController, TelegramRootCon
+         
+         self.popToRoot(animated: false)
+     
+-        if let index = rootTabController.controllers.firstIndex(where: { $0 is PeerInfoScreenImpl }) {
++        if let index = rootTabController.controllers.firstIndex(where: { $0 === self.contactsController }) {
+             rootTabController.selectedIndex = index
+         }
+-        
+-        let contactsController = ContactsController(context: self.context)
+-        self.contactsController = contactsController
+-        self.pushViewController(contactsController)
+     }
+         
+     public func openSettings(edit: Bool) {
