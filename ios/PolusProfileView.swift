@@ -3,11 +3,6 @@ import PhotosUI
 import UniformTypeIdentifiers
 import AccountContext
 
-func polusColor(_ hex: String) -> UIColor {
-    guard let value = UInt32(hex, radix: 16) else { return .systemIndigo }
-    return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
-}
-
 final class PolusProfilePanel: UIView {
     private let stack = UIStackView()
     private(set) var preferredHeight: CGFloat = 0
