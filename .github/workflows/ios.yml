@@ -5,7 +5,7 @@ on:
     branches: ['codex/ipa-build']
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -13,6 +13,8 @@ jobs:
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - name: Select Xcode 27.1
         run: |
           sudo xcode-select --switch /Applications/Xcode_27.1.app/Contents/Developer
@@ -49,9 +51,23 @@ jobs:
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           POLUS_BUNDLE_ID: ${{ vars.POLUS_BUNDLE_ID || 'org.polus.messenger' }}
         run: python3 -u scripts/build_ios.py ipa --build-number "$((100000 + GITHUB_RUN_NUMBER))"
-      - uses: actions/upload-artifact@v4
+      - name: Upload IPA
+        id: upload_ipa
+        uses: actions/upload-artifact@v7
+        continue-on-error: true
         with:
           name: VeilGram-unsigned
           path: out/VeilGram-unsigned.ipa
           if-no-files-found: error
+          compression-level: 0
           retention-days: 7
+      - name: Save IPA to a draft release if artifact upload fails
+        if: steps.upload_ipa.outcome == 'failure'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          release_url="$(gh release create "ipa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
+            out/VeilGram-unsigned.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --draft --title "VeilGram iPhone build #${GITHUB_RUN_NUMBER}" \
+            --notes "IPA from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
+          printf '[Download the IPA from the draft release](%s)\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"
