@@ -8,6 +8,8 @@ final class PolusProfilePanel: UIView {
     private(set) var preferredHeight: CGFloat = 0
     var action: (() -> Void)?
     var share: (() -> Void)?
+    var archive: (() -> Void)?
+    var hosting: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -46,6 +48,24 @@ final class PolusProfilePanel: UIView {
             button.addTarget(self, action: #selector(self.performAction), for: .touchUpInside)
             self.append(button, height: 44)
         }
+        if self.archive != nil {
+            var config = UIButton.Configuration.gray()
+            config.title = "Удалённые сообщения"
+            config.image = UIImage(systemName: "archivebox")
+            config.imagePadding = 8
+            let button = UIButton(configuration: config)
+            button.addTarget(self, action: #selector(self.openArchive), for: .touchUpInside)
+            self.append(button, height: 44)
+        }
+        if self.hosting != nil {
+            var config = UIButton.Configuration.gray()
+            config.title = "Сервер VeilGram"
+            config.image = UIImage(systemName: "server.rack")
+            config.imagePadding = 8
+            let button = UIButton(configuration: config)
+            button.addTarget(self, action: #selector(self.openHosting), for: .touchUpInside)
+            self.append(button, height: 44)
+        }
         if canGift {
             var config = UIButton.Configuration.gray()
             config.title = "Отправить свой профиль VeilGram"
@@ -66,6 +86,8 @@ final class PolusProfilePanel: UIView {
 
     @objc private func performAction() { self.action?() }
     @objc private func shareProfile() { self.share?() }
+    @objc private func openArchive() { self.archive?() }
+    @objc private func openHosting() { self.hosting?() }
 }
 
 final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {

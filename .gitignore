@@ -1,5 +1,6 @@
 /Telegram-iOS/
 /server/data/
 /server/.env
+/server/node_modules/
 /out/
 /.build/

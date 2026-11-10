@@ -942,7 +942,7 @@ index 7751e79..826dbb4 100644
          if self.isAvatarExpanded != isAvatarExpanded {
              self.isAvatarExpanded = isAvatarExpanded
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-index 463ab66..6016783 100644
+index 463ab66..8137f36 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 @@ -265,6 +265,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
@@ -985,7 +985,7 @@ index 463ab66..6016783 100644
          if previousData?.members?.membersContext !== data.members?.membersContext {
              if let peer = data.peer, let _ = data.members {
                  self.groupMembersSearchContext = GroupMembersSearchContext(context: self.context, peerId: peer.id)
-@@ -4687,6 +4699,170 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -4687,6 +4699,195 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -1003,10 +1003,23 @@ index 463ab66..6016783 100644
 +        if canEdit {
 +            self.polusProfile = PolusProfileService.localProfile(account)
 +            self.polusProfile.member = true
++            if self.isSettings {
++                panel.archive = { [weak self] in
++                    guard let self, let controller = self.controller else { return }
++                    let archive = PolusDeletedArchiveScreen(context: self.context)
++                    controller.present(UINavigationController(rootViewController: archive), animated: true, completion: nil)
++                }
++                panel.hosting = { [weak self] in
++                    guard let controller = self?.controller else { return }
++                    let hosting = PolusHostingScreen(account: account)
++                    controller.present(UINavigationController(rootViewController: hosting), animated: true, completion: nil)
++                }
++            }
 +            panel.action = { [weak self] in
 +                guard let self, let controller = self.controller else { return }
 +                let editor = PolusProfileEditor(account: account, profile: self.polusProfile, balance: PolusTelegramExchange.balance(self.context)) { [weak self] profile in
 +                    self?.applyPolusProfile(profile, account: account, peer: peer)
++                    self?.publishPolusProfile(account: account)
 +                }
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
@@ -1014,6 +1027,16 @@ index 463ab66..6016783 100644
 +            panel.share = { [weak self] in self?.sharePolusProfile() }
 +        }
 +        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
++    }
++
++    private func publishPolusProfile(account: String) {
++        Task { @MainActor [weak self] in
++            do {
++                try await PolusHostedProfiles.publish(account: account)
++            } catch {
++                self?.showPolusMessage("Оформление сохранено на iPhone. Не удалось обновить профиль на сервере.")
++            }
++        }
 +    }
 +
 +    func refreshPolusProfile() {
@@ -1115,6 +1138,7 @@ index 463ab66..6016783 100644
 +            return
 +        }
 +        PolusProfileService.setShowcase([item] + current, account: account)
++        self.publishPolusProfile(account: account)
 +        self.updatePolusGiftShelf()
 +        self.requestLayout()
 +        self.showPolusMessage("\(gift.title) #\(gift.number) добавлен в витрину VeilGram.")
@@ -1131,6 +1155,7 @@ index 463ab66..6016783 100644
 +        if self.peerId == self.context.account.peerId, saved.contains(item) {
 +            alert.addAction(UIAlertAction(title: "Убрать из витрины", style: .destructive) { [weak self] _ in
 +                PolusProfileService.setShowcase(PolusProfileService.showcase(account).filter { $0 != item }, account: account)
++                self.publishPolusProfile(account: account)
 +                self?.updatePolusGiftShelf()
 +                self?.requestLayout()
 +            })
@@ -1156,7 +1181,7 @@ index 463ab66..6016783 100644
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5917,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5942,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -1174,7 +1199,7 @@ index 463ab66..6016783 100644
                
              var isFirst = true
              for (sectionId, sectionItems) in items {
-@@ -6171,6 +6358,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -6171,6 +6383,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              let paneSideInsets = peerInfoSideInsets(layout: layout)
              self.paneContainerNode.stripInsets = (paneSideInsets.stripLeft, paneSideInsets.stripRight)
              self.paneContainerNode.update(size: self.paneContainerNode.bounds.size, sideInset: paneSideInsets.paneSideInset, topInset: paneContainerTopInset, bottomInset: bottomInset, deviceMetrics: layout.deviceMetrics, visibleHeight: visibleHeight, expansionFraction: self.initialExpandPanes ? 1.0 : effectiveAreaExpansionFraction, presentationData: self.presentationData, data: self.data, areTabsHidden: self.headerNode.customNavigationContentNode != nil, disableTabSwitching: disableTabSwitching, navigationHeight: navigationHeight, transition: transition)
@@ -1182,7 +1207,7 @@ index 463ab66..6016783 100644
            
              // iPhone Duo unfolded portrait: the search field ends left of the status island.
              let navigationButtonsWidth = layout.size.width - layout.safeInsets.left - layout.safeInsets.right - layout.navigationBarTrailingButtonsInset
-@@ -7303,6 +7491,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
+@@ -7303,6 +7516,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
          }
          
          self.controllerNode.refreshHasPersonalChannelsIfNeeded()

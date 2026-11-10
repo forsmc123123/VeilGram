@@ -50,7 +50,8 @@ def prepare(source):
     apply(source, ROOT / 'patches' / 'telegram-ios.patch')
     run('git', 'diff', '--check', cwd=source)
     for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift', 'PolusGIF.swift',
-                     'PolusGifts.swift', 'PolusTelegramExchange.swift'):
+                     'PolusGifts.swift', 'PolusTelegramExchange.swift', 'PolusDeletedArchiveScreen.swift',
+                     'PolusHostedProfiles.swift'):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
                     source / 'submodules/TelegramCore/Sources/State/Sync/PolusDeletedMessages.swift')
@@ -71,10 +72,18 @@ def prepare(source):
     }), encoding='utf-8')
     catalog = json.loads((ROOT / 'server' / 'catalog.json').read_text(encoding='utf-8'))
     catalog_json = json.dumps(catalog, ensure_ascii=False, separators=(',', ':'))
+    hosted_url = os.environ.get('VEILGRAM_HOSTED_URL', '').strip()
+    hosted_certificate_hash = os.environ.get('VEILGRAM_CERTIFICATE_SHA256', '').strip().lower()
+    if hosted_url and not re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?', hosted_url):
+        raise SystemExit('VEILGRAM_HOSTED_URL must be an HTTPS origin.')
+    if hosted_certificate_hash and not re.fullmatch(r'[a-f0-9]{64}', hosted_certificate_hash):
+        raise SystemExit('VEILGRAM_CERTIFICATE_SHA256 must be a SHA-256 certificate fingerprint.')
     config = source / PROFILE_SOURCES / 'PolusBuildConfig.swift'
     config.write_text(
         f'enum PolusBuildConfig {{\n'
         f'    static let catalogJSON = {json.dumps(catalog_json, ensure_ascii=False)}\n'
+        f'    static let hostedURL = {json.dumps(hosted_url)}\n'
+        f'    static let hostedCertificateHash = {json.dumps(hosted_certificate_hash)}\n'
         f'}}\n', encoding='utf-8',
     )
     print(f'Mod source ready: {source}', flush=True)
