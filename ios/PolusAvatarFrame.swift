@@ -142,7 +142,7 @@ final class PolusAvatarFrame: UIView {
         self.gradient.colors = (preset?.colors.map(polusColor) ?? [.systemPurple, .systemIndigo]).map { $0.cgColor }
         guard let media = profile.media else { return }
         self.loadTask = Task { @MainActor [weak self] in
-            guard let data = try? await PolusProfileService.mediaData(account: account, peer: peer, media: media),
+            guard let data = try? PolusProfileService.mediaData(account: account, peer: peer, media: media),
                   !Task.isCancelled, let self else { return }
             switch media.kind {
             case .photo:

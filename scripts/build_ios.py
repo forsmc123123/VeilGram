@@ -6,7 +6,6 @@ import re
 import shutil
 import subprocess
 import sys
-from urllib.parse import urlsplit
 import zipfile
 
 
@@ -31,7 +30,7 @@ def apply(source, patch):
     run('git', 'apply', patch, cwd=source)
 
 
-def prepare(source, profile_origin):
+def prepare(source):
     if not (source / '.git').exists():
         if source.exists() and any(source.iterdir()):
             raise SystemExit(f'Source directory is not empty: {source}')
@@ -50,7 +49,8 @@ def prepare(source, profile_origin):
 
     apply(source, ROOT / 'patches' / 'telegram-ios.patch')
     run('git', 'diff', '--check', cwd=source)
-    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift', 'PolusGifts.swift'):
+    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift',
+                     'PolusGifts.swift', 'PolusTelegramExchange.swift'):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
                     source / 'submodules/TelegramCore/Sources/State/Sync/PolusDeletedMessages.swift')
@@ -68,7 +68,6 @@ def prepare(source, profile_origin):
     config = source / PROFILE_SOURCES / 'PolusBuildConfig.swift'
     config.write_text(
         f'enum PolusBuildConfig {{\n'
-        f'    static let profileOrigin = {json.dumps(profile_origin, ensure_ascii=False)}\n'
         f'    static let catalogJSON = {json.dumps(catalog_json, ensure_ascii=False)}\n'
         f'}}\n', encoding='utf-8',
     )
@@ -142,13 +141,6 @@ def main():
     parser.add_argument('--build-number', type=int, default=100001)
     args = parser.parse_args()
 
-    origin = os.environ.get('POLUS_PROFILE_ORIGIN', '').strip().rstrip('/')
-    if origin:
-        parsed = urlsplit(origin)
-        if (parsed.scheme != 'https' or not parsed.hostname or parsed.path or parsed.query or parsed.fragment
-                or parsed.username or parsed.password or not re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]+)?', origin)):
-            parser.error('POLUS_PROFILE_ORIGIN must be an HTTPS origin, such as https://profiles.example.com.')
-
     config = None
     if args.mode != 'prepare':
         if sys.platform != 'darwin':
@@ -156,7 +148,7 @@ def main():
         config = write_configuration(args.mode)
 
     source = args.source.resolve()
-    prepare(source, origin)
+    prepare(source)
     if config:
         native_build(source, args.mode, config, args.build_number)
 

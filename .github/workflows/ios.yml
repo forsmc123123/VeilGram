@@ -27,11 +27,16 @@ jobs:
           if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
             sudo ln -s /usr/sbin/sysctl /usr/local/bin/sysctl
           fi
+      - name: Check VeilGram exchange packets
+        run: |
+          mkdir -p .build
+          swiftc -frontend -parse ios/*.swift
+          swiftc ios/PolusProfileService.swift scripts/check_profile_packets.swift -o .build/check-profile-packets
+          .build/check-profile-packets
       - name: Compile and package for sideloading
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
-          POLUS_PROFILE_ORIGIN: ${{ vars.POLUS_PROFILE_ORIGIN }}
           POLUS_BUNDLE_ID: ${{ vars.POLUS_BUNDLE_ID || 'org.polus.messenger' }}
         run: python3 -u scripts/build_ios.py ipa --build-number "$((100000 + GITHUB_RUN_NUMBER))"
       - uses: actions/upload-artifact@v4
