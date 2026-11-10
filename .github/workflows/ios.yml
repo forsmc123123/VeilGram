@@ -30,14 +30,19 @@ jobs:
           fi
       - name: Check VeilGram exchange packets
         run: |
-          mkdir -p .build
+          mkdir -p .build/iphoneos
           swiftc -frontend -parse ios/*.swift
-          swiftc ios/VeilGramGiftLink.swift ios/PolusProfileService.swift scripts/check_profile_packets.swift -o .build/check-profile-packets
+          swiftc -emit-module -parse-as-library -module-name TelegramCore ios/VeilGramGiftLink.swift -o .build/TelegramCore.swiftmodule
+          swiftc -emit-object -parse-as-library -module-name TelegramCore ios/VeilGramGiftLink.swift -o .build/VeilGramGiftLink.o
+          swiftc -I .build .build/VeilGramGiftLink.o ios/PolusProfileService.swift scripts/check_profile_packets.swift -o .build/check-profile-packets
           .build/check-profile-packets
           swiftc ios/PolusGIF.swift scripts/check_banner_gif.swift -o .build/check-banner-gif
           .build/check-banner-gif
+          sdk="$(xcrun --sdk iphoneos --show-sdk-path)"
+          xcrun --sdk iphoneos swiftc -emit-module -parse-as-library -module-name TelegramCore -target arm64-apple-ios15.0 \
+            -sdk "$sdk" ios/VeilGramGiftLink.swift -o .build/iphoneos/TelegramCore.swiftmodule
           xcrun --sdk iphoneos swiftc -typecheck -warnings-as-errors -target arm64-apple-ios15.0 \
-            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" ios/VeilGramGiftLink.swift ios/PolusProfileService.swift ios/PolusGIF.swift ios/PolusAvatarFrame.swift scripts/check_profile_packets.swift
+            -sdk "$sdk" -I .build/iphoneos ios/PolusProfileService.swift ios/PolusGIF.swift ios/PolusAvatarFrame.swift scripts/check_profile_packets.swift
       - name: Compile and package for sideloading
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}

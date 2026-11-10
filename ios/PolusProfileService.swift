@@ -1,5 +1,6 @@
 import Foundation
 import CryptoKit
+import TelegramCore
 
 struct PolusDecoration: Decodable, Sendable {
     let id: String
