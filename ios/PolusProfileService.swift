@@ -92,9 +92,7 @@ enum PolusProfileService {
     }
 
     static func giftCost(_ id: String) -> Int? {
-        if id.range(of: "^gift:[1-9][0-9]{0,18}$", options: .regularExpression) != nil { return 25 }
-        if id.range(of: "^nft:[A-Za-z0-9]{1,60}-[1-9][0-9]{0,11}$", options: .regularExpression) != nil { return 100 }
-        return nil
+        VeilGramGiftLink.cost(id)
     }
 
     static func collectibleSlug(_ input: String) -> String? {

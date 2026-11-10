@@ -237,7 +237,7 @@ final class PolusGiftPicker: UITableViewController {
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         guard section == 0 else { return nil }
-        return self.addToShowcase == nil ? "Подарок придёт файлом в личный чат. VeilGram покажет его во вкладке «Подарки»." :
+        return self.addToShowcase == nil ? "В VeilGram получатель увидит карточку в личном чате и подарок во вкладке «Подарки»." :
             "Вставь ссылку на NFT или удержи коллекционный подарок в любом профиле и выбери «В витрину VeilGram»."
     }
 
