@@ -501,6 +501,132 @@ index 3bba777..abd7c8d 100644
                      items: titleSegments,
                      noDelay: false,
                      animateScale: true,
+diff --git a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
+index e1624f6..31b662d 100644
+--- a/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
++++ b/submodules/TelegramUI/Components/Gifts/GiftSetupScreen/Sources/GiftSetupScreen.swift
+@@ -120,6 +120,8 @@ private final class GiftSetupScreenComponent: Component {
+         private let inputPanelExternalState = MessageInputPanelComponent.ExternalState()
+         
+         private let actionButton = ComponentView<Empty>()
++        private let veilGramButton = UIButton(type: .system)
++        private var isSendingVeilGramGift = false
+         
+         private var ignoreScrolling: Bool = false
+         
+@@ -340,7 +342,48 @@ private final class GiftSetupScreenComponent: Component {
+             self.bottomEdgeEffectView.layer.animatePosition(from: CGPoint(), to: CGPoint(x: 0.0, y: animateOffset), duration: 0.3, timingFunction: CAMediaTimingFunctionName.easeInEaseOut.rawValue, removeOnCompletion: false, additive: true)
+         }
+         
++        @objc private func sendVeilGramGiftPressed() {
++            guard !self.inProgress, !self.isSendingVeilGramGift, let component = self.component,
++                  let controller = self.environment?.controller(),
++                  let actions = VeilGramVisualGiftActions.current,
++                  case let .starGift(value, _) = component.subject else { return }
++            let gift = StarGift.generic(value)
++            let cost = actions.cost(gift)
++            let balance = actions.balance(component.context)
++            let alert = UIAlertController(title: "Отправить визуально", message: "Стоимость \(cost) ★ · баланс \(balance) ★ VeilGram", preferredStyle: .alert)
++            alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
++            if balance < 1000 {
++                alert.addAction(UIAlertAction(title: "Пополнить визуальные звёзды", style: .default) { [weak self] _ in
++                    actions.topUp(component.context)
++                    self?.state?.updated()
++                })
++            }
++            if balance >= cost {
++                alert.addAction(UIAlertAction(title: "Отправить визуально", style: .default) { [weak self] _ in
++                    guard let self, !self.isSendingVeilGramGift else { return }
++                    self.isSendingVeilGramGift = true
++                    self.state?.updated()
++                    Task { @MainActor [weak self, weak controller] in
++                        let text: String
++                        do {
++                            try await actions.send(component.context, component.peerId, gift)
++                            text = "Визуальный подарок добавлен в очередь Telegram."
++                        } catch {
++                            text = error.localizedDescription
++                        }
++                        self?.isSendingVeilGramGift = false
++                        self?.state?.updated()
++                        let result = UIAlertController(title: "VeilGram", message: text, preferredStyle: .alert)
++                        result.addAction(UIAlertAction(title: "ОК", style: .default))
++                        controller?.present(result, animated: true)
++                    }
++                })
++            }
++            controller.present(alert, animated: true)
++        }
++
+         @objc private func proceed() {
++            guard !self.isSendingVeilGramGift else { return }
+             guard !self.inProgress, let component = self.component, let environment = self.environment else {
+                 return
+             }
+@@ -2047,7 +2090,7 @@ private final class GiftSetupScreenComponent: Component {
+                         id: AnyHashable("title"),
+                         component: AnyComponent(VStack(buttonTitleItems, spacing: 1.0))
+                     ),
+-                    isEnabled: buttonIsEnabled,
++                        isEnabled: buttonIsEnabled && !self.isSendingVeilGramGift,
+                     displaysProgress: self.inProgress,
+                     action: { [weak self] in
+                         self?.proceed()
+@@ -2056,7 +2099,13 @@ private final class GiftSetupScreenComponent: Component {
+                 environment: {},
+                 containerSize: CGSize(width: fillingSize - buttonInsets.left - buttonInsets.right, height: buttonHeight)
+             )
+-            var bottomPanelHeight = 13.0 + buttonInsets.bottom + actionButtonSize.height
++            var visualGiftCost: Int?
++            if let actions = VeilGramVisualGiftActions.current, case let .starGift(gift, _) = component.subject,
++               component.peerId.namespace == Namespaces.Peer.CloudUser, component.peerId != component.context.account.peerId {
++                visualGiftCost = actions.cost(.generic(gift))
++            }
++            let visualButtonSpace: CGFloat = visualGiftCost == nil ? 0 : 37
++            var bottomPanelHeight = 13.0 + buttonInsets.bottom + actionButtonSize.height + visualButtonSpace
+             
+             let bottomEdgeEffectHeight: CGFloat = bottomPanelHeight
+             let bottomEdgeEffectFrame = CGRect(origin: CGPoint(x: rawSideInset, y: availableSize.height - bottomEdgeEffectHeight), size: CGSize(width: fillingSize, height: bottomEdgeEffectHeight))
+@@ -2066,20 +2115,37 @@ private final class GiftSetupScreenComponent: Component {
+                 self.containerView.addSubview(self.bottomEdgeEffectView)
+             }
+             
+-            let actionButtonFrame = CGRect(origin: CGPoint(x: rawSideInset + buttonInsets.left, y: availableSize.height - buttonInsets.bottom - actionButtonSize.height), size: actionButtonSize)
++            let actionButtonFrame = CGRect(origin: CGPoint(x: rawSideInset + buttonInsets.left, y: availableSize.height - buttonInsets.bottom - actionButtonSize.height - visualButtonSpace), size: actionButtonSize)
+             if let buttonView = self.actionButton.view {
+                 if buttonView.superview == nil {
+                     self.containerView.addSubview(buttonView)
+                 }
+                 buttonView.frame = actionButtonFrame
+             }
++            if let visualGiftCost {
++                if self.veilGramButton.superview == nil {
++                    self.veilGramButton.addTarget(self, action: #selector(self.sendVeilGramGiftPressed), for: .touchUpInside)
++                    self.containerView.addSubview(self.veilGramButton)
++                }
++                self.veilGramButton.isHidden = false
++                self.veilGramButton.isEnabled = !self.inProgress && !self.isSendingVeilGramGift
++                var configuration = UIButton.Configuration.tinted()
++                configuration.title = "Отправить визуально · \(visualGiftCost) ★"
++                configuration.baseForegroundColor = theme.list.itemAccentColor
++                configuration.cornerStyle = .capsule
++                self.veilGramButton.configuration = configuration
++                self.veilGramButton.frame = CGRect(x: actionButtonFrame.minX, y: actionButtonFrame.maxY + 5.0,
++                    width: actionButtonFrame.width, height: visualButtonSpace - 5.0)
++            } else {
++                self.veilGramButton.isHidden = true
++            }
+                         
+             bottomPanelHeight -= 1.0
+                         
+             contentHeight += bottomPanelHeight
+             initialContentHeight += bottomPanelHeight
+             
+-            clippingY = actionButtonFrame.maxY + 24.0
++            clippingY = actionButtonFrame.maxY + visualButtonSpace + 24.0
+                         
+             var topInset: CGFloat = max(0.0, availableSize.height - containerInset - initialContentHeight)
+             if self.inputPanelExternalState.isEditing {
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
 index bd33bb7..ac41890 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
@@ -513,8 +639,38 @@ index bd33bb7..ac41890 100644
          "//submodules/TelegramUI/Components/BatchVideoRendering",
          "//submodules/TelegramUI/Components/GifVideoLayer",
          "//submodules/Components/HierarchyTrackingLayer",
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoData.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoData.swift
+index 880fc99..8ac9828 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoData.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoData.swift
+@@ -1642,10 +1642,8 @@ func peerInfoScreenData(
+                 var availablePanes = availablePanes
+                 if isMyProfile {
+                     availablePanes?.insert(.stories, at: 0)
+-                    if availablePanes != nil, profileGiftsContext != nil, let cachedData = peerView.cachedData as? CachedUserData {
+-                        if let starGiftsCount = cachedData.starGiftsCount, starGiftsCount > 0 {
+-                            availablePanes?.insert(.gifts, at: 1)
+-                        }
++                    if profileGiftsContext != nil {
++                        availablePanes?.insert(.gifts, at: 1)
+                     }
+                     if let hasStoryArchive, hasStoryArchive {
+                         availablePanes?.append(.storyArchive)
+@@ -1655,10 +1653,8 @@ func peerInfoScreenData(
+                         availablePanes?.insert(.stories, at: 0)
+                     }
+                     
+-                    if availablePanes != nil, profileGiftsContext != nil, let cachedData = peerView.cachedData as? CachedUserData, peerView.peerId != context.account.peerId {
+-                        if let starGiftsCount = cachedData.starGiftsCount, starGiftsCount > 0 {
+-                            availablePanes?.insert(.gifts, at: hasStories ? 1 : 0)
+-                        }
++                    if profileGiftsContext != nil, peerView.peerId != context.account.peerId {
++                        availablePanes?.insert(.gifts, at: hasStories ? 1 : 0)
+                     }
+                     
+                     if availablePanes != nil, groupsInCommon != nil, let cachedData = peerView.cachedData as? CachedUserData {
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
-index 7751e79..69d08a9 100644
+index 7751e79..826dbb4 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoHeaderNode.swift
 @@ -130,6 +130,9 @@ final class PeerInfoHeaderNode: ASDisplayNode {
@@ -522,7 +678,7 @@ index 7751e79..69d08a9 100644
      let titleNodeRawContainer: ASDisplayNode
      let titleNode: MultiScaleTextNode
 +    private var polusProfile = PolusProfile.empty
-+    private var polusAvatarFrame: PolusAvatarFrame?
++    private var polusBanner: PolusProfileBanner?
 +    private var polusBadges: [UILabel] = []
      var standardTitle: ComponentView<Empty>?
      
@@ -567,31 +723,44 @@ index 7751e79..69d08a9 100644
          var titleFrame: CGRect
          var subtitleFrame: CGRect
          let usernameFrame: CGRect
-@@ -1966,6 +1984,11 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+@@ -2455,6 +2473,15 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         } else {
+             transition.updateFrame(view: self.backgroundBannerView, frame: bannerFrame)
          }
-         let roundAvatarFrame = CGRect(origin: CGPoint(x: avatarCenter.x - roundAvatarSize.width / 2.0, y: -contentOffset + avatarOffset + avatarCenter.y - roundAvatarSize.height / 2.0), size: roundAvatarSize)
-         self.expansionRoundAvatarFrame = roundAvatarFrame
-+        if let frame = self.polusAvatarFrame {
-+            let hasFrame = self.polusProfile.banner != nil || self.polusProfile.media != nil
-+            frame.setVisible(hasFrame && !self.isAvatarExpanded && !state.isEditing && !isSearching)
-+            transition.updateFrame(view: frame, frame: roundAvatarFrame.insetBy(dx: -8.0, dy: -8.0))
++
++        if let banner = self.polusBanner {
++            let hasBanner = self.polusProfile.banner != nil || self.polusProfile.media != nil
++            let height = max(180.0, avatarFrame.maxY + 85.0)
++            let offset = max(0.0, contentOffset)
++            banner.setVisible(hasBanner && !self.isAvatarExpanded && !state.isEditing && !isSearching && offset < height)
++            transition.updateFrame(view: banner, frame: CGRect(x: 0.0, y: -bannerFrame.minY - offset,
++                width: bannerFrame.width, height: height))
 +        }
- 
-         var apparentAvatarFrame: CGRect
-         var apparentAvatarListFrame: CGRect
-@@ -2980,6 +3003,33 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+                         
+         let backgroundCoverSize = self.backgroundCover.update(
+             transition: ComponentTransition(transition),
+@@ -2476,7 +2503,7 @@ final class PeerInfoHeaderNode: ASDisplayNode {
+         )
+         if let backgroundCoverView = self.backgroundCover.view as? PeerInfoCoverComponent.View {
+             if backgroundCoverView.superview == nil {
+-                self.backgroundBannerView.addSubview(backgroundCoverView)
++                self.backgroundBannerView.insertSubview(backgroundCoverView, at: 0)
+             }
+             if additive {
+                 transition.updateFrameAdditive(view: backgroundCoverView, frame: CGRect(origin: CGPoint(x: -bannerInset, y: bannerFrame.height - backgroundCoverSize.height), size: backgroundCoverSize))
+@@ -2980,6 +3007,33 @@ final class PeerInfoHeaderNode: ASDisplayNode {
          return result
      }
      
 +    func applyPolusProfile(_ profile: PolusProfile, account: String, peer: String) {
 +        self.polusProfile = profile
-+        if self.polusAvatarFrame == nil && (profile.banner != nil || profile.media != nil) {
-+            let frame = PolusAvatarFrame(frame: .zero)
-+            frame.isHidden = true
-+            self.avatarClippingNode.view.addSubview(frame)
-+            self.polusAvatarFrame = frame
++        if self.polusBanner == nil && (profile.banner != nil || profile.media != nil) {
++            let banner = PolusProfileBanner(frame: .zero)
++            banner.isHidden = true
++            self.backgroundBannerView.addSubview(banner)
++            self.polusBanner = banner
 +        }
-+        self.polusAvatarFrame?.apply(profile, account: account, peer: peer)
++        self.polusBanner?.apply(profile, account: account, peer: peer)
 +
 +        if self.polusBadges.isEmpty && profile.member == true {
 +            for key in [TitleNodeStateRegular, TitleNodeStateExpanded] {
@@ -614,22 +783,31 @@ index 7751e79..69d08a9 100644
          if self.isAvatarExpanded != isAvatarExpanded {
              self.isAvatarExpanded = isAvatarExpanded
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-index 463ab66..cc4d32c 100644
+index 463ab66..6016783 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-@@ -265,6 +265,11 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -265,6 +265,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
      let edgeEffectView: EdgeEffectView
      
      let headerNode: PeerInfoHeaderNode
 +    private var polusProfile = PolusProfile.empty
 +    private var polusPanel: PolusProfilePanel?
++    private var polusGiftShelf: PolusGiftShelf?
 +    private var polusPanelNode: ASDisplayNode?
 +    private var polusLoading = false
 +    private var polusSharing = false
      var underHeaderContentsAlpha: CGFloat = 1.0
      var regularSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
      var editingSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
-@@ -1715,6 +1720,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -1426,6 +1432,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             guard let strongSelf = self else {
+                 return
+             }
++            strongSelf.configurePolusGiftPane()
+ 
+             if let (layout, navigationHeight) = strongSelf.validLayout {
+                 if strongSelf.headerNode.isAvatarExpanded {
+@@ -1715,6 +1722,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              }
          }
          
@@ -638,7 +816,7 @@ index 463ab66..cc4d32c 100644
          self.performNavigationButtonAction = { [weak self] key, source, gesture in
              guard let strongSelf = self else {
                  return
-@@ -2865,6 +2872,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -2865,6 +2874,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              }
          }
          self.data = data
@@ -648,7 +826,7 @@ index 463ab66..cc4d32c 100644
          if previousData?.members?.membersContext !== data.members?.membersContext {
              if let peer = data.peer, let _ = data.members {
                  self.groupMembersSearchContext = GroupMembersSearchContext(context: self.context, peerId: peer.id)
-@@ -4687,6 +4697,99 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -4687,6 +4699,170 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -674,13 +852,6 @@ index 463ab66..cc4d32c 100644
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
 +        } else {
-+            panel.action = { [weak self] in
-+                guard let self, self.canExchangePolusProfile, let controller = self.controller else { return }
-+                let picker = PolusGiftPicker(context: self.context, recipient: self.peerId) { [weak self] in
-+                    self?.showPolusMessage("Подарок добавлен в очередь отправки Telegram.")
-+                }
-+                controller.present(UINavigationController(rootViewController: picker), animated: true, completion: nil)
-+            }
 +            panel.share = { [weak self] in self?.sharePolusProfile() }
 +        }
 +        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
@@ -707,7 +878,7 @@ index 463ab66..cc4d32c 100644
 +
 +    private func sharePolusProfile() {
 +        guard self.canExchangePolusProfile, !self.polusSharing, let controller = self.controller else { return }
-+        let alert = UIAlertController(title: "Отправить профиль VeilGram?", message: "Рамка, цвет имени, статус и витрина подарков будут отправлены файлом в личный чат.", preferredStyle: .alert)
++        let alert = UIAlertController(title: "Отправить профиль VeilGram?", message: "Баннер, цвет имени, статус и витрина подарков будут отправлены файлом в личный чат.", preferredStyle: .alert)
 +        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
 +        alert.addAction(UIAlertAction(title: "Отправить", style: .default) { [weak self] _ in
 +            guard let self, !self.polusSharing else { return }
@@ -732,10 +903,88 @@ index 463ab66..cc4d32c 100644
 +        self.controller?.present(alert, animated: true, completion: nil)
 +    }
 +
++    private func configurePolusGiftPane() {
++        guard let shelf = self.polusGiftShelf, let pane = self.paneContainerNode.currentPane?.node as? PeerInfoGiftsPaneNode else { return }
++        pane.addVeilGramCollectible = { [weak self] gift in self?.addPolusGift(gift) }
++        pane.setVeilGramShelf(shelf)
++    }
++
++    private func updatePolusGiftShelf() {
++        let isOwn = self.peerId == self.context.account.peerId
++        guard isOwn || self.canExchangePolusProfile else { return }
++        let shelf: PolusGiftShelf
++        if let current = self.polusGiftShelf {
++            shelf = current
++        } else {
++            shelf = PolusGiftShelf(context: self.context, isOwn: isOwn)
++            shelf.onAction = { [weak self] in self?.openPolusGiftPicker() }
++            shelf.onGift = { [weak self] item in self?.openPolusGift(item) }
++            self.polusGiftShelf = shelf
++        }
++        let account = String(self.context.account.peerId.id._internalGetInt64Value())
++        let saved = isOwn ? PolusProfileService.showcase(account) : []
++        shelf.update(items: PolusProfileService.mergeGifts(saved, self.polusProfile.received ?? []))
++        self.configurePolusGiftPane()
++    }
++
++    private func openPolusGiftPicker() {
++        guard let controller = self.controller else { return }
++        let picker: PolusGiftPicker
++        if self.peerId == self.context.account.peerId {
++            picker = PolusGiftPicker(context: self.context, recipient: self.peerId, addToShowcase: { [weak self] gift in
++                self?.addPolusGift(gift)
++            })
++        } else {
++            guard self.canExchangePolusProfile else { return }
++            picker = PolusGiftPicker(context: self.context, recipient: self.peerId, didSend: { [weak self] in
++                self?.showPolusMessage("Подарок добавлен в очередь отправки Telegram.")
++            })
++        }
++        controller.present(UINavigationController(rootViewController: picker), animated: true, completion: nil)
++    }
++
++    private func addPolusGift(_ gift: StarGift.UniqueGift) {
++        let account = String(self.context.account.peerId.id._internalGetInt64Value())
++        let item = "nft:\(gift.slug)"
++        let current = PolusProfileService.showcase(account)
++        guard !current.contains(item) else {
++            self.showPolusMessage("Этот NFT уже в твоей витрине.")
++            return
++        }
++        guard current.count < 12, PolusProfileService.giftCost(item) != nil else {
++            self.showPolusMessage("В витрине помещается до 12 добавленных NFT.")
++            return
++        }
++        PolusProfileService.setShowcase([item] + current, account: account)
++        self.updatePolusGiftShelf()
++        self.requestLayout()
++        self.showPolusMessage("\(gift.title) #\(gift.number) добавлен в витрину VeilGram.")
++    }
++
++    private func openPolusGift(_ item: String) {
++        let account = String(self.context.account.peerId.id._internalGetInt64Value())
++        let saved = PolusProfileService.showcase(account)
++        let alert = UIAlertController(title: "Визуальный подарок VeilGram", message: "Копия для оформления профиля.", preferredStyle: .alert)
++        if item.hasPrefix("nft:"), PolusProfileService.giftCost(item) != nil,
++           let url = URL(string: "https://t.me/nft/" + String(item.dropFirst(4))) {
++            alert.addAction(UIAlertAction(title: "Открыть оригинал", style: .default) { _ in UIApplication.shared.open(url) })
++        }
++        if self.peerId == self.context.account.peerId, saved.contains(item) {
++            alert.addAction(UIAlertAction(title: "Убрать из витрины", style: .destructive) { [weak self] _ in
++                PolusProfileService.setShowcase(PolusProfileService.showcase(account).filter { $0 != item }, account: account)
++                self?.updatePolusGiftShelf()
++                self?.requestLayout()
++            })
++        }
++        alert.addAction(UIAlertAction(title: "Закрыть", style: .cancel))
++        self.controller?.present(alert, animated: true, completion: nil)
++    }
++
 +    private func updatePolusPanel() {
 +        guard let panel = self.polusPanel else { return }
 +        panel.update(context: self.context, profile: self.polusProfile,
 +            canEdit: self.peerId == self.context.account.peerId, canGift: self.canExchangePolusProfile)
++        self.updatePolusGiftShelf()
 +        self.requestLayout()
 +    }
 +
@@ -748,7 +997,7 @@ index 463ab66..cc4d32c 100644
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5844,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5917,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -766,7 +1015,15 @@ index 463ab66..cc4d32c 100644
                
              var isFirst = true
              for (sectionId, sectionItems) in items {
-@@ -7303,6 +7417,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
+@@ -6171,6 +6358,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+             let paneSideInsets = peerInfoSideInsets(layout: layout)
+             self.paneContainerNode.stripInsets = (paneSideInsets.stripLeft, paneSideInsets.stripRight)
+             self.paneContainerNode.update(size: self.paneContainerNode.bounds.size, sideInset: paneSideInsets.paneSideInset, topInset: paneContainerTopInset, bottomInset: bottomInset, deviceMetrics: layout.deviceMetrics, visibleHeight: visibleHeight, expansionFraction: self.initialExpandPanes ? 1.0 : effectiveAreaExpansionFraction, presentationData: self.presentationData, data: self.data, areTabsHidden: self.headerNode.customNavigationContentNode != nil, disableTabSwitching: disableTabSwitching, navigationHeight: navigationHeight, transition: transition)
++            self.configurePolusGiftPane()
+           
+             // iPhone Duo unfolded portrait: the search field ends left of the status island.
+             let navigationButtonsWidth = layout.size.width - layout.safeInsets.left - layout.safeInsets.right - layout.navigationBarTrailingButtonsInset
+@@ -7303,6 +7491,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
          }
          
          self.controllerNode.refreshHasPersonalChannelsIfNeeded()
@@ -774,11 +1031,97 @@ index 463ab66..cc4d32c 100644
          self.controllerNode.initialExpandPanes = false
          
          if self.isSettings {
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+index d0ff157..e8feb34 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/GiftsListView.swift
+@@ -45,6 +45,7 @@ final class GiftsListView: UIView {
+     private var footerText: ComponentView<Empty>?
+     
+     private let emptyResultsClippingView = UIView()
++    var hasVeilGramShelf = false
+     private let emptyResultsAnimation = ComponentView<Empty>()
+     private let emptyResultsTitle = ComponentView<Empty>()
+     private let emptyResultsText = ComponentView<Empty>()
+@@ -963,7 +964,7 @@ final class GiftsListView: UIView {
+                 view.bounds = CGRect(origin: .zero, size: emptyResultsActionFrame.size)
+                 panelTransition.setPosition(view: view, position: emptyResultsActionFrame.center)
+             }
+-        } else if self.filteredResultsAreEmpty {
++        } else if self.filteredResultsAreEmpty && !self.hasVeilGramShelf {
+             let sideInset: CGFloat = 44.0
+             let emptyAnimationHeight = 148.0
+             let topInset: CGFloat = contentTopInset
+diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+index 7a4fcdf..d1aab75 100644
+--- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
++++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoVisualMediaPaneNode/Sources/PeerInfoGiftsPaneNode.swift
+@@ -89,6 +89,16 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+     private let backgroundNode: ASDisplayNode
+     private let scrollNode: ASScrollNode
+     private var giftsListView: GiftsListView
++    private var veilGramShelf: UIView?
++    public var addVeilGramCollectible: ((StarGift.UniqueGift) -> Void)?
++
++    public func setVeilGramShelf(_ view: UIView) {
++        guard self.veilGramShelf !== view || view.superview !== self.scrollNode.view else { return }
++        self.veilGramShelf?.removeFromSuperview()
++        self.veilGramShelf = view
++        self.scrollNode.view.addSubview(view)
++        self.updateScrolling(transition: .immediate)
++    }
+     
+     private let tabSelector = ComponentView<Empty>()
+     public private(set) var currentCollection: GiftCollection = .all
+@@ -744,7 +754,20 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+                 })
+             }
+             
++            let showVeilGramShelf = self.currentCollection == .all && !self.isReordering && self.veilGramShelf != nil
++            self.giftsListView.hasVeilGramShelf = showVeilGramShelf
++            if let shelf = self.veilGramShelf, shelf.superview === self.scrollNode.view {
++                shelf.isHidden = !showVeilGramShelf
++                if showVeilGramShelf {
++                    let inset = params.sideInset + 16.0
++                    let width = max(0.0, params.size.width - inset * 2.0)
++                    let height = shelf.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude)).height
++                    transition.setFrame(view: shelf, frame: CGRect(x: inset, y: topInset + 8.0, width: width, height: height))
++                    topInset += height + 16.0
++                }
++            }
+             var contentHeight = self.giftsListView.updateScrolling(topInset: topInset, visibleBounds: visibleBounds, transition: transition)
++            contentHeight = max(contentHeight, topInset)
+             
+             var bottomScrollInset: CGFloat = 0.0
+             let size = params.size
+@@ -1007,6 +1030,14 @@ public final class PeerInfoGiftsPaneNode: ASDisplayNode, PeerInfoPaneNode, UIScr
+         }
+         
+         var items: [ContextMenuItem] = []
++        if let addVeilGramCollectible = self.addVeilGramCollectible, case let .unique(collectible) = gift.gift {
++            items.append(.action(ContextMenuActionItem(text: "В витрину VeilGram", icon: { theme in
++                generateTintedImage(image: UIImage(bundleImageName: "Peer Info/Gifts/AddToCollection"), color: theme.contextMenu.primaryColor)
++            }, action: { _, dismiss in
++                dismiss(.default)
++                Queue.mainQueue().after(0.35) { addVeilGramCollectible(collectible) }
++            })))
++        }
+         if canManage {
+             items.append(.action(ContextMenuActionItem(text: strings.PeerInfo_Gifts_Context_AddToCollection, textLayout: .twoLinesMax, icon: { theme in generateTintedImage(image: UIImage(bundleImageName: "Peer Info/Gifts/AddToCollection"), color: theme.contextMenu.primaryColor) }, action: { [weak self] c, f in
+                 var subItems: [ContextMenuItem] = []
 diff --git a/submodules/TelegramUI/Sources/AppDelegate.swift b/submodules/TelegramUI/Sources/AppDelegate.swift
-index cf30428..4d53d8e 100644
+index cf30428..d50a64f 100644
 --- a/submodules/TelegramUI/Sources/AppDelegate.swift
 +++ b/submodules/TelegramUI/Sources/AppDelegate.swift
-@@ -236,6 +236,38 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -1,6 +1,7 @@
+ import UIKit
+ import SwiftSignalKit
+ import Display
++import PeerInfoScreen
+ import TelegramCore
+ import UserNotifications
+ import Intents
+@@ -236,6 +237,40 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
      )
  }
  
@@ -791,10 +1134,10 @@ index cf30428..4d53d8e 100644
 +        self.accessibilityElementsHidden = true
 +        self.label.text = "VeilGram"
 +        self.label.textAlignment = .center
-+        self.label.font = .systemFont(ofSize: 9, weight: .semibold)
-+        self.label.textColor = UIColor(red: 0.87, green: 0.81, blue: 1.0, alpha: 1.0)
-+        self.label.backgroundColor = UIColor(white: 0.04, alpha: 0.92)
-+        self.label.layer.cornerRadius = 7
++        self.label.font = .systemFont(ofSize: 10, weight: .bold)
++        self.label.textColor = .white
++        self.label.backgroundColor = .black
++        self.label.layer.cornerRadius = 8
 +        self.label.clipsToBounds = true
 +        self.addSubview(self.label)
 +    }
@@ -804,8 +1147,10 @@ index cf30428..4d53d8e 100644
 +    override func layoutSubviews() {
 +        super.layoutSubviews()
 +        let top = self.window?.safeAreaInsets.top ?? 0
-+        self.label.isHidden = top < 50 || self.bounds.width >= self.bounds.height
-+        self.label.frame = CGRect(x: floor((self.bounds.width - 62) / 2.0), y: top - 10, width: 62, height: 14)
++        let metrics = DeviceMetrics(screenSize: self.bounds.size, scale: self.traitCollection.displayScale,
++            statusBarHeight: top, onScreenNavigationHeight: self.window?.safeAreaInsets.bottom)
++        self.label.isHidden = !(metrics.hasDynamicIsland || top >= 57.0) || top < 40.0 || self.bounds.width >= self.bounds.height
++        self.label.frame = CGRect(x: floor((self.bounds.width - 72) / 2.0), y: top - 17.0, width: 72, height: 15)
 +    }
 +
 +    override func safeAreaInsetsDidChange() {
@@ -817,10 +1162,13 @@ index cf30428..4d53d8e 100644
  @objc(AppDelegate) class AppDelegate: UIResponder, UIApplicationDelegate, PKPushRegistryDelegate, UNUserNotificationCenterDelegate, URLSessionDelegate, URLSessionTaskDelegate {
      @objc var window: UIWindow?
      var nativeWindow: (UIWindow & WindowHost)?
-@@ -445,6 +477,12 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -445,6 +480,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
          }
          self.window = window
          self.nativeWindow = window
++        Task { @MainActor in
++            VeilGramChatDecoration.installGiftActions()
++        }
 +        if UIDevice.current.userInterfaceIdiom == .phone {
 +            let islandLabel = VeilGramIslandLabel(frame: window.bounds)
 +            islandLabel.autoresizingMask = [.flexibleWidth, .flexibleHeight]
@@ -830,7 +1178,7 @@ index cf30428..4d53d8e 100644
          
          hostView.containerView.layer.addSublayer(MetalEngine.shared.rootLayer)
          // On the first start after an update, compile the pipelines that would otherwise stall their first use.
-@@ -691,8 +729,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -691,8 +735,15 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
              networkEngineFactory: RustNetworkEngineFactory()
          )
          
@@ -848,7 +1196,7 @@ index cf30428..4d53d8e 100644
              return true
          }
          
-@@ -997,7 +1042,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -997,7 +1048,8 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
          }, getAvailableAlternateIcons: {
              if #available(iOS 10.3, *) {
                  var icons = [
@@ -858,7 +1206,7 @@ index cf30428..4d53d8e 100644
                      PresentationAppIcon(name: "New2", imageName: "New2"),
                      PresentationAppIcon(name: "New1", imageName: "New1"),
                      PresentationAppIcon(name: "BlackIcon", imageName: "BlackIcon"),
-@@ -1010,9 +1056,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
+@@ -1010,9 +1062,9 @@ private func extractAccountManagerState(records: AccountRecordsView<TelegramAcco
                      icons.append(PresentationAppIcon(name: "WhiteFilledIcon", imageName: "WhiteFilledIcon"))
                  }
                  

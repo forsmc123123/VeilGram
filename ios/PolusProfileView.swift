@@ -37,27 +37,10 @@ final class PolusProfilePanel: UIView {
             label.textColor = .secondaryLabel
             self.append(label, height: 24)
         }
-        if let received = profile.received, !received.isEmpty {
-            let title = UILabel()
-            title.text = "Визуальные подарки VeilGram"
-            title.font = .preferredFont(forTextStyle: .caption1)
-            title.textColor = .secondaryLabel
-            self.append(title, height: 18)
-            let row = UIStackView()
-            row.spacing = 6
-            row.distribution = .fillEqually
-            for item in received.prefix(6) {
-                row.addArrangedSubview(PolusGiftTile(context: context, item: item))
-            }
-            for _ in row.arrangedSubviews.count..<max(3, row.arrangedSubviews.count) {
-                row.addArrangedSubview(UIView())
-            }
-            self.append(row, height: 59)
-        }
-        if canEdit || canGift {
+        if canEdit {
             var config = UIButton.Configuration.tinted()
-            config.title = canEdit ? "Оформление VeilGram" : "Подарить в VeilGram"
-            config.image = UIImage(systemName: canEdit ? "paintbrush.pointed" : "gift")
+            config.title = "Оформление VeilGram"
+            config.image = UIImage(systemName: "paintbrush.pointed")
             config.imagePadding = 8
             let button = UIButton(configuration: config)
             button.addTarget(self, action: #selector(self.performAction), for: .touchUpInside)
@@ -91,6 +74,9 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     private var profile: PolusProfile
     private let didSave: (PolusProfile) -> Void
     private var busy = false
+    private let bannerPreview = PolusProfileBanner(frame: .zero)
+    private let previewContainer = UIView()
+    private let previewAvatar = UIImageView(image: UIImage(systemName: "person.crop.circle.fill"))
     private let banners = PolusProfileService.catalog.banners
     private let colors: [(title: String, hex: String?)] = [
         ("По умолчанию", nil), ("Сирень", "C4A7FF"), ("Небо", "78C8FF"),
@@ -112,6 +98,35 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         self.title = "Оформление VeilGram"
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Отмена", style: .plain, target: self, action: #selector(self.close))
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сохранить", style: .done, target: self, action: #selector(self.save))
+        self.previewContainer.backgroundColor = .secondarySystemGroupedBackground
+        self.previewContainer.layer.cornerRadius = 18
+        self.previewContainer.clipsToBounds = true
+        self.previewContainer.accessibilityLabel = "Предпросмотр баннера за аватаркой"
+        self.previewContainer.isAccessibilityElement = true
+        self.previewAvatar.contentMode = .scaleAspectFit
+        self.previewAvatar.tintColor = .white
+        self.previewAvatar.backgroundColor = UIColor(white: 0.18, alpha: 1)
+        self.previewAvatar.layer.cornerRadius = 28
+        self.previewAvatar.clipsToBounds = true
+        self.previewContainer.addSubview(self.bannerPreview)
+        self.previewContainer.addSubview(self.previewAvatar)
+        self.tableView.tableHeaderView = self.previewContainer
+        self.updateBannerPreview()
+    }
+
+    override func viewDidLayoutSubviews() {
+        super.viewDidLayoutSubviews()
+        let width = self.tableView.bounds.width
+        guard width > 0, self.previewContainer.bounds.size != CGSize(width: width, height: 156) else { return }
+        self.previewContainer.frame = CGRect(x: 0, y: 0, width: width, height: 156)
+        self.bannerPreview.frame = self.previewContainer.bounds
+        self.previewAvatar.frame = CGRect(x: floor((width - 56) / 2), y: 50, width: 56, height: 56)
+        self.tableView.tableHeaderView = self.previewContainer
+    }
+
+    private func updateBannerPreview() {
+        self.bannerPreview.apply(self.profile, account: self.account, peer: self.account)
+        self.bannerPreview.setVisible(self.profile.banner != nil || self.profile.media != nil)
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
@@ -126,7 +141,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch section {
-        case 0: return "Рамка вокруг аватарки"
+        case 0: return "Баннер за аватаркой"
         case 1: return "Цвет имени и статус"
         default: return "Визуальные звёзды"
         }
@@ -144,7 +159,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
         switch (indexPath.section, indexPath.row) {
         case (0, 0):
-            cell.textLabel?.text = "Без рамки"
+            cell.textLabel?.text = "Без баннера"
             cell.accessoryType = self.profile.banner == nil && self.profile.media == nil ? .checkmark : .none
         case (0, 1):
             cell.textLabel?.text = "Выбрать фото или видео"
@@ -212,6 +227,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         default:
             return
         }
+        self.updateBannerPreview()
         self.tableView.reloadData()
     }
 
@@ -252,6 +268,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     private func importFrame(_ url: URL) async throws {
         self.profile.media = try await PolusFrameImport.prepare(url, account: self.account)
         self.profile.banner = nil
+        self.updateBannerPreview()
         self.tableView.reloadData()
     }
 

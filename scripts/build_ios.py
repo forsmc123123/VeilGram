@@ -54,6 +54,8 @@ def prepare(source):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
                     source / 'submodules/TelegramCore/Sources/State/Sync/PolusDeletedMessages.swift')
+    shutil.copyfile(ROOT / 'ios' / 'VeilGramVisualGiftActions.swift',
+                    source / 'submodules/AccountContext/Sources/VeilGramVisualGiftActions.swift')
     shutil.copytree(ROOT / 'ios' / 'branding' / 'VeilGram.icon',
                     source / 'Telegram' / 'Telegram-iOS' / 'VeilGram.icon', dirs_exist_ok=True)
     icon_preview = source / 'Telegram' / 'Telegram-iOS' / 'Icons.xcassets' / 'VeilGramIcon.imageset'
