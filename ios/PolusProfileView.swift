@@ -1,30 +1,17 @@
 import UIKit
+import PhotosUI
+import UniformTypeIdentifiers
+import AccountContext
 
-private func polusColor(_ hex: String) -> UIColor {
+func polusColor(_ hex: String) -> UIColor {
     guard let value = UInt32(hex, radix: 16) else { return .systemIndigo }
     return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
-}
-
-private final class PolusGradientCard: UIView {
-    override class var layerClass: AnyClass { CAGradientLayer.self }
-
-    init(decoration: PolusDecoration, radius: CGFloat) {
-        super.init(frame: .zero)
-        self.layer.cornerRadius = radius
-        self.clipsToBounds = true
-        guard let gradient = self.layer as? CAGradientLayer else { return }
-        gradient.colors = decoration.colors.map { polusColor($0).cgColor }
-        gradient.startPoint = CGPoint(x: 0, y: 0.2)
-        gradient.endPoint = CGPoint(x: 1, y: 1)
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 }
 
 final class PolusProfilePanel: UIView {
     private let stack = UIStackView()
     private(set) var preferredHeight: CGFloat = 0
-    var edit: (() -> Void)?
+    var action: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -40,82 +27,44 @@ final class PolusProfilePanel: UIView {
         self.stack.frame = self.bounds
     }
 
-    func update(profile: PolusProfile, canEdit: Bool) {
+    func update(context: AccountContext, profile: PolusProfile, canEdit: Bool, canGift: Bool) {
         for item in self.stack.arrangedSubviews {
             self.stack.removeArrangedSubview(item)
             item.removeFromSuperview()
         }
         self.preferredHeight = 0
-
-        let catalog = PolusProfileService.catalog
-        if let banner = catalog.banners.first(where: { $0.id == profile.banner }) {
-            let card = PolusGradientCard(decoration: banner, radius: 17)
-            let text = UIStackView()
-            text.axis = .vertical
-            text.spacing = 4
-            let caption = UILabel()
-            caption.text = "VEILGRAM · БАННЕР ПРОФИЛЯ"
-            caption.font = .systemFont(ofSize: 10, weight: .semibold)
-            caption.textColor = .white.withAlphaComponent(0.86)
-            let title = UILabel()
-            title.text = banner.title
-            title.font = .systemFont(ofSize: 20, weight: .bold)
-            title.textColor = .white
-            text.addArrangedSubview(caption)
-            text.addArrangedSubview(title)
-            text.translatesAutoresizingMaskIntoConstraints = false
-            card.addSubview(text)
-            let symbol = UILabel()
-            symbol.text = banner.symbol
-            symbol.font = .systemFont(ofSize: 62, weight: .light)
-            symbol.textColor = .white.withAlphaComponent(0.72)
-            symbol.translatesAutoresizingMaskIntoConstraints = false
-            card.addSubview(symbol)
-            NSLayoutConstraint.activate([
-                text.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
-                text.centerYAnchor.constraint(equalTo: card.centerYAnchor),
-                text.trailingAnchor.constraint(lessThanOrEqualTo: symbol.leadingAnchor, constant: -4),
-                symbol.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
-                symbol.centerYAnchor.constraint(equalTo: card.centerYAnchor)
-            ])
-            card.isAccessibilityElement = true
-            card.accessibilityLabel = "Баннер VeilGram. \(banner.title)"
-            self.append(card, height: 84)
+        if let status = profile.status, !status.isEmpty {
+            let label = UILabel()
+            label.text = status
+            label.font = .preferredFont(forTextStyle: .subheadline)
+            label.textAlignment = .center
+            label.textColor = .secondaryLabel
+            self.append(label, height: 24)
         }
-
-        let gifts = profile.gifts.compactMap { id in catalog.gifts.first(where: { $0.id == id }) }
-        if !gifts.isEmpty {
+        if let received = profile.received, !received.isEmpty {
+            let title = UILabel()
+            title.text = "Визуальные подарки VeilGram"
+            title.font = .preferredFont(forTextStyle: .caption1)
+            title.textColor = .secondaryLabel
+            self.append(title, height: 18)
             let row = UIStackView()
             row.spacing = 6
             row.distribution = .fillEqually
-            row.accessibilityLabel = "Визуальные подарки VeilGram"
-            for gift in gifts {
-                let card = PolusGradientCard(decoration: gift, radius: 12)
-                let symbol = UILabel()
-                symbol.text = gift.symbol
-                symbol.font = .systemFont(ofSize: 26)
-                symbol.textAlignment = .center
-                symbol.translatesAutoresizingMaskIntoConstraints = false
-                card.addSubview(symbol)
-                NSLayoutConstraint.activate([
-                    symbol.centerXAnchor.constraint(equalTo: card.centerXAnchor),
-                    symbol.centerYAnchor.constraint(equalTo: card.centerYAnchor)
-                ])
-                card.isAccessibilityElement = true
-                card.accessibilityLabel = "Визуальный подарок. \(gift.title)"
-                row.addArrangedSubview(card)
+            for item in received.prefix(6) {
+                row.addArrangedSubview(PolusGiftTile(context: context, item: item))
             }
-            for _ in gifts.count..<max(3, gifts.count) { row.addArrangedSubview(UIView()) }
-            self.append(row, height: 47)
+            for _ in row.arrangedSubviews.count..<max(3, row.arrangedSubviews.count) {
+                row.addArrangedSubview(UIView())
+            }
+            self.append(row, height: 59)
         }
-
-        if canEdit {
+        if canEdit || canGift {
             var config = UIButton.Configuration.tinted()
-            config.title = "Оформление VeilGram"
-            config.image = UIImage(systemName: "paintbrush.pointed")
+            config.title = canEdit ? "Оформление VeilGram" : "Подарить в VeilGram"
+            config.image = UIImage(systemName: canEdit ? "paintbrush.pointed" : "gift")
             config.imagePadding = 8
             let button = UIButton(configuration: config)
-            button.addTarget(self, action: #selector(self.editPressed), for: .touchUpInside)
+            button.addTarget(self, action: #selector(self.performAction), for: .touchUpInside)
             self.append(button, height: 44)
         }
     }
@@ -127,16 +76,20 @@ final class PolusProfilePanel: UIView {
         self.preferredHeight += height
     }
 
-    @objc private func editPressed() { self.edit?() }
+    @objc private func performAction() { self.action?() }
 }
 
-final class PolusProfileEditor: UITableViewController {
+final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
     private let account: String
     private var profile: PolusProfile
     private let didSave: (PolusProfile) -> Void
     private var busy = false
     private var hasEditedSelection = false
-    private let catalog = PolusProfileService.catalog
+    private let banners = PolusProfileService.catalog.banners
+    private let colors: [(title: String, hex: String?)] = [
+        ("По умолчанию", nil), ("Сирень", "C4A7FF"), ("Небо", "78C8FF"),
+        ("Мята", "7EE3C4"), ("Роза", "FF9CC4"), ("Золото", "FFCD78")
+    ]
 
     init(account: String, profile: PolusProfile, didSave: @escaping (PolusProfile) -> Void) {
         self.account = account
@@ -152,107 +105,213 @@ final class PolusProfileEditor: UITableViewController {
         self.title = "Оформление VeilGram"
         self.navigationItem.leftBarButtonItem = UIBarButtonItem(title: "Отмена", style: .plain, target: self, action: #selector(self.close))
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(title: "Сохранить", style: .done, target: self, action: #selector(self.save))
-        self.tableView.register(UITableViewCell.self, forCellReuseIdentifier: "decoration")
     }
 
-    override func numberOfSections(in tableView: UITableView) -> Int { 3 }
+    override func numberOfSections(in tableView: UITableView) -> Int { 4 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
-        case 0: return self.catalog.banners.count + 1
-        case 1: return self.catalog.gifts.count
-        default: return PolusProfileService.canSync && !PolusProfileService.isLinked(self.account) ? 2 : 0
+        case 0: return self.banners.count + 3
+        case 1: return self.colors.count + 1
+        case 2: return 1
+        default: return PolusProfileService.canSync && !PolusProfileService.isLinked(self.account) ? 3 : 1
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch section {
-        case 0: return "Баннер"
-        case 1: return "Визуальные подарки · \(self.profile.gifts.count) из 6"
-        default: return PolusProfileService.canSync ? "Общий профиль" : nil
+        case 0: return "Рамка вокруг аватарки"
+        case 1: return "Цвет имени и статус"
+        case 2: return "Визуальные звёзды"
+        default: return "Общий профиль"
         }
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        guard section == 2 else { return nil }
-        if PolusProfileService.isLinked(self.account) {
-            return "После сохранения оформление увидят подключённые пользователи VeilGram."
+        switch section {
+        case 0: return "Фото и видео можно выбрать из медиатеки. Для оригинального GIF используй «Файлы»."
+        case 2: return "Открой профиль участника VeilGram, чтобы подарить ему визуальную копию подарка Telegram."
+        case 3:
+            if PolusProfileService.isLinked(self.account) {
+                return "Сохрани оформление, чтобы его увидели другие подключённые участники VeilGram."
+            }
+            return "Для общего профиля укажи адрес сервера VeilGram и подключи свой Telegram-аккаунт через бота."
+        default: return nil
         }
-        if PolusProfileService.canSync {
-            return "Чтобы поделиться оформлением, нажмите «Запустить» в боте с этого Telegram-аккаунта, затем введите код и сохраните профиль. До подключения оформление хранится на этом iPhone."
-        }
-        return "Оформление хранится на этом iPhone. Для общего профиля нужен сервер VeilGram."
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        let cell = tableView.dequeueReusableCell(withIdentifier: "decoration", for: indexPath)
-        var content = cell.defaultContentConfiguration()
-        cell.accessoryType = .none
-        if indexPath.section == 0 {
-            let banner = indexPath.row == 0 ? nil : self.catalog.banners[indexPath.row - 1]
-            content.text = banner.map { "\($0.symbol)  \($0.title)" } ?? "Без баннера"
-            cell.accessoryType = self.profile.banner == banner?.id ? .checkmark : .none
-        } else if indexPath.section == 1 {
-            let gift = self.catalog.gifts[indexPath.row]
-            content.text = "\(gift.symbol)  \(gift.title)"
-            cell.accessoryType = self.profile.gifts.contains(gift.id) ? .checkmark : .none
-        } else {
-            content.text = indexPath.row == 0 ? "Открыть бота" : "Ввести код"
-            content.textProperties.color = self.view.tintColor
+        let cell = UITableViewCell(style: .subtitle, reuseIdentifier: nil)
+        switch (indexPath.section, indexPath.row) {
+        case (0, 0):
+            cell.textLabel?.text = "Без рамки"
+            cell.accessoryType = self.profile.banner == nil && self.profile.media == nil ? .checkmark : .none
+        case (0, 1):
+            cell.textLabel?.text = "Выбрать фото или видео"
+            cell.accessoryType = self.profile.media != nil && self.profile.media?.kind != .gif ? .checkmark : .none
+        case (0, 2):
+            cell.textLabel?.text = "Выбрать файл · фото, GIF, видео"
+            cell.accessoryType = self.profile.media?.kind == .gif ? .checkmark : .disclosureIndicator
+        case (0, let row):
+            let banner = self.banners[row - 3]
+            cell.textLabel?.text = "\(banner.symbol)  \(banner.title)"
+            cell.accessoryType = self.profile.banner == banner.id ? .checkmark : .none
+        case (1, 0):
+            cell.textLabel?.text = "Статус VeilGram"
+            cell.detailTextLabel?.text = self.profile.status
+            cell.accessoryType = .disclosureIndicator
+        case (1, let row):
+            let color = self.colors[row - 1]
+            cell.textLabel?.text = color.title
+            cell.imageView?.image = color.hex.map { _ in UIImage(systemName: "circle.fill") } ?? nil
+            cell.imageView?.tintColor = color.hex.map(polusColor)
+            cell.accessoryType = self.profile.color == color.hex ? .checkmark : .none
+        case (2, _):
+            cell.selectionStyle = .none
+            cell.textLabel?.text = self.profile.balance.map { "\($0) ✦ VeilGram" } ?? "Доступны после подключения профиля"
+        case (3, 0):
+            cell.textLabel?.text = "Сервер VeilGram"
+            cell.detailTextLabel?.text = PolusProfileService.canSync ? PolusProfileService.originText : "Адрес не указан"
+            cell.accessoryType = .disclosureIndicator
+        default:
+            cell.textLabel?.text = indexPath.row == 1 ? "Открыть бота" : "Ввести код"
+            cell.textLabel?.textColor = self.view.tintColor
         }
-        cell.contentConfiguration = content
         return cell
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
         guard !self.busy else { return }
-        if indexPath.section == 0 {
-            self.profile.banner = indexPath.row == 0 ? nil : self.catalog.banners[indexPath.row - 1].id
-        } else if indexPath.section == 1 {
-            let id = self.catalog.gifts[indexPath.row].id
-            if let index = self.profile.gifts.firstIndex(of: id) {
-                self.profile.gifts.remove(at: index)
-            } else if self.profile.gifts.count < 6 {
-                self.profile.gifts.append(id)
-            } else {
-                self.showMessage("В профиле помещается до шести подарков.")
-                return
+        switch (indexPath.section, indexPath.row) {
+        case (0, 0):
+            self.profile.banner = nil
+            self.profile.media = nil
+        case (0, 1):
+            var configuration = PHPickerConfiguration()
+            configuration.filter = .any(of: [.images, .videos])
+            configuration.preferredAssetRepresentationMode = .current
+            let picker = PHPickerViewController(configuration: configuration)
+            picker.delegate = self
+            self.present(picker, animated: true)
+            return
+        case (0, 2):
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.image, .movie], asCopy: true)
+            picker.delegate = self
+            self.present(picker, animated: true)
+            return
+        case (0, let row):
+            self.profile.banner = self.banners[row - 3].id
+            self.profile.media = nil
+        case (1, 0):
+            self.textInput(title: "Статус VeilGram", value: self.profile.status) { text in
+                let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard clean.unicodeScalars.count <= 32, clean.rangeOfCharacter(from: .controlCharacters) == nil else {
+                    self.showMessage("Статус должен помещаться в одну строку до 32 символов.")
+                    return
+                }
+                self.profile.status = clean.isEmpty ? nil : clean
+                self.hasEditedSelection = true
+                self.tableView.reloadData()
             }
-        } else {
-            if indexPath.row == 0 { self.openBot() } else { self.enterCode() }
+            return
+        case (1, let row):
+            self.profile.color = self.colors[row - 1].hex
+        case (3, 0):
+            self.textInput(title: "HTTPS-адрес сервера VeilGram", value: PolusProfileService.originText, keyboard: .URL) { text in
+                guard PolusProfileService.configureOrigin(text) else {
+                    self.showMessage("Укажи HTTPS-адрес сервера без пути.")
+                    return
+                }
+                self.profile.member = nil
+                self.profile.balance = nil
+                self.profile.received = nil
+                self.tableView.reloadData()
+            }
+            return
+        case (3, 1):
+            self.perform {
+                let url = try await PolusProfileService.botURL()
+                UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            }
+            return
+        case (3, 2):
+            self.textInput(title: "Код из бота", value: nil, keyboard: .asciiCapable) { code in
+                self.perform {
+                    try await PolusProfileService.link(self.account, code: code)
+                    let shared = try await PolusProfileService.load(account: self.account, peer: self.account)
+                    if self.hasEditedSelection {
+                        self.profile.member = shared.member
+                        self.profile.balance = shared.balance
+                        self.profile.received = shared.received
+                    } else {
+                        self.profile = shared
+                    }
+                    self.tableView.reloadData()
+                }
+            }
+            return
+        default:
             return
         }
         self.hasEditedSelection = true
-        tableView.reloadSections(IndexSet(integer: indexPath.section), with: .none)
+        self.tableView.reloadData()
     }
 
-    private func openBot() {
+    func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
+        picker.dismiss(animated: true)
+        guard let provider = results.first?.itemProvider else { return }
+        let type: UTType = provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? .movie : .image
         self.perform {
-            let url = try await PolusProfileService.botURL()
-            UIApplication.shared.open(url, options: [:], completionHandler: nil)
+            let temporary: URL = try await withCheckedThrowingContinuation { continuation in
+                _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
+                    guard let url else {
+                        continuation.resume(throwing: error ?? PolusFrameImport.ImportError.unsupported)
+                        return
+                    }
+                    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension)
+                    do {
+                        try FileManager.default.copyItem(at: url, to: temporary)
+                        continuation.resume(returning: temporary)
+                    } catch {
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+            defer { try? FileManager.default.removeItem(at: temporary) }
+            try await self.importFrame(temporary)
         }
     }
 
-    private func enterCode() {
-        let alert = UIAlertController(title: "Код из бота", message: "Введите восемь символов из сообщения бота.", preferredStyle: .alert)
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        self.perform {
+            let scoped = url.startAccessingSecurityScopedResource()
+            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+            try await self.importFrame(url)
+        }
+    }
+
+    private func importFrame(_ url: URL) async throws {
+        self.profile.media = try await PolusFrameImport.prepare(url, account: self.account)
+        self.profile.banner = nil
+        self.hasEditedSelection = true
+        self.tableView.reloadData()
+    }
+
+    private func textInput(title: String, value: String?, keyboard: UIKeyboardType = .default, completion: @escaping (String) -> Void) {
+        let alert = UIAlertController(title: title, message: nil, preferredStyle: .alert)
         alert.addTextField { field in
-            field.autocapitalizationType = .allCharacters
-            field.autocorrectionType = .no
-            field.keyboardType = .asciiCapable
-            field.textContentType = .oneTimeCode
+            field.text = value
+            field.keyboardType = keyboard
+            if keyboard != .default {
+                field.autocapitalizationType = .none
+                field.autocorrectionType = .no
+            }
         }
         alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-        alert.addAction(UIAlertAction(title: "Подключить", style: .default) { [weak self, weak alert] _ in
-            guard let self, let code = alert?.textFields?.first?.text else { return }
-            self.perform {
-                try await PolusProfileService.link(self.account, code: code)
-                if !self.hasEditedSelection {
-                    let profile = try? await PolusProfileService.load(account: self.account, peer: self.account)
-                    self.profile = profile ?? self.profile
-                }
-                self.tableView.reloadData()
-            }
+        alert.addAction(UIAlertAction(title: "Готово", style: .default) { [weak alert] _ in
+            completion(alert?.textFields?.first?.text ?? "")
         })
         self.present(alert, animated: true)
     }
@@ -261,7 +320,7 @@ final class PolusProfileEditor: UITableViewController {
         self.perform {
             let profile = try await PolusProfileService.save(account: self.account, profile: self.profile)
             self.didSave(profile)
-            self.dismiss(animated: true, completion: nil)
+            self.dismiss(animated: true)
         }
     }
 
