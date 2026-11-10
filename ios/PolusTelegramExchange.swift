@@ -1,6 +1,5 @@
 import Foundation
 import AccountContext
-import Postbox
 import SwiftSignalKit
 import TelegramCore
 
@@ -24,14 +23,14 @@ enum PolusTelegramExchange {
         return max(0, self.allowance - spent)
     }
 
-    static func shareProfile(context: AccountContext, peer: PeerId) async throws {
+    static func shareProfile(context: AccountContext, peer: EnginePeer.Id) async throws {
         var profile = PolusProfileService.localProfile(self.account(context))
         profile.received = await self.receivedGifts(context: context)
         let data = try PolusProfileService.packet(profile: profile, gift: nil, account: self.account(context))
         try await self.enqueue(context: context, peer: peer, name: self.profileFile, caption: "👻 Мой профиль VeilGram", data: data)
     }
 
-    static func sendGift(context: AccountContext, peer: PeerId, item: String, title: String) async throws {
+    static func sendGift(context: AccountContext, peer: EnginePeer.Id, item: String, title: String) async throws {
         guard let cost = PolusProfileService.giftCost(item), self.balance(context) >= cost else {
             throw PolusProfileService.ServiceError.insufficientStars
         }
@@ -46,7 +45,7 @@ enum PolusTelegramExchange {
         }
     }
 
-    private static func enqueue(context: AccountContext, peer: PeerId, name: String, caption: String, data: Data) async throws {
+    private static func enqueue(context: AccountContext, peer: EnginePeer.Id, name: String, caption: String, data: Data) async throws {
         guard peer.namespace == Namespaces.Peer.CloudUser, peer != context.account.peerId else {
             throw PolusProfileService.ServiceError.couldNotSend
         }
@@ -65,7 +64,7 @@ enum PolusTelegramExchange {
               ids.contains(where: { $0 != nil }) else { throw PolusProfileService.ServiceError.couldNotSend }
     }
 
-    static func load(context: AccountContext, peer: PeerId) async -> PolusProfile {
+    static func load(context: AccountContext, peer: EnginePeer.Id) async -> PolusProfile {
         if peer == context.account.peerId {
             let gifts = await self.receivedGifts(context: context)
             var own = PolusProfileService.localProfile(self.account(context))
@@ -102,13 +101,13 @@ enum PolusTelegramExchange {
         return gifts
     }
 
-    private static func search(context: AccountContext, location: SearchMessagesLocation) async -> [Message] {
+    private static func search(context: AccountContext, location: SearchMessagesLocation) async -> [EngineRawMessage] {
         let signal = context.engine.messages.searchMessages(location: location, query: "VeilGram", state: nil, limit: 50)
         guard let (result, _) = await self.first(signal) else { return [] }
         return result.messages.sorted { $0.timestamp == $1.timestamp ? $0.id.id > $1.id.id : $0.timestamp > $1.timestamp }
     }
 
-    private static func exchangeFile(_ message: Message, context: AccountContext) -> TelegramMediaFile? {
+    private static func exchangeFile(_ message: EngineRawMessage, context: AccountContext) -> TelegramMediaFile? {
         let peer = message.id.peerId
         guard peer.namespace == Namespaces.Peer.CloudUser, peer != context.account.peerId,
               message.id.namespace == Namespaces.Message.Cloud, message.author?.id == peer,
@@ -120,7 +119,7 @@ enum PolusTelegramExchange {
         }
     }
 
-    private static func packet(context: AccountContext, message: Message, file: TelegramMediaFile) async -> (profile: PolusProfile?, gift: String?)? {
+    private static func packet(context: AccountContext, message: EngineRawMessage, file: TelegramMediaFile) async -> (profile: PolusProfile?, gift: String?)? {
         let reference = AnyMediaReference.message(message: MessageReference(message), media: file)
         let fetch = context.engine.resources.fetch(reference: reference.resourceReference(file.resource),
             userLocation: .peer(message.id.peerId), userContentType: .other).startStandalone()
@@ -150,7 +149,7 @@ enum PolusTelegramExchange {
 
 public enum VeilGramChatDecoration {
     @MainActor
-    public static func load(context: AccountContext, peer: PeerId) async -> (member: Bool, color: UInt32?) {
+    public static func load(context: AccountContext, peer: EnginePeer.Id) async -> (member: Bool, color: UInt32?) {
         let profile = await PolusTelegramExchange.load(context: context, peer: peer)
         return (profile.member == true, profile.color.flatMap { UInt32($0, radix: 16) })
     }

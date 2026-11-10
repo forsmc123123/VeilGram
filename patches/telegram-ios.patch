@@ -502,15 +502,14 @@ index 3bba777..abd7c8d 100644
                      noDelay: false,
                      animateScale: true,
 diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
-index bd33bb7..3682452 100644
+index bd33bb7..ac41890 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/BUILD
-@@ -171,6 +171,8 @@ swift_library(
+@@ -171,6 +171,7 @@ swift_library(
          "//submodules/TelegramUI/Components/CameraScreen",
          "//submodules/TelegramUI/Components/PeerInfo/VerifyAlertController",
          "//submodules/TelegramUI/Components/Gifts/GiftViewScreen",
 +        "//submodules/TelegramUI/Components/Gifts/GiftItemComponent",
-+        "//submodules/Postbox",
          "//submodules/TelegramUI/Components/BatchVideoRendering",
          "//submodules/TelegramUI/Components/GifVideoLayer",
          "//submodules/Components/HierarchyTrackingLayer",
