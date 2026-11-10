@@ -2,17 +2,6 @@ import Foundation
 import CryptoKit
 import TelegramCore
 
-struct PolusDecoration: Decodable, Sendable {
-    let id: String
-    let title: String
-    let symbol: String
-    let colors: [String]
-}
-
-struct PolusCatalog: Decodable, Sendable {
-    let banners: [PolusDecoration]
-}
-
 struct PolusAvatarMedia: Codable, Equatable, Sendable {
     enum Kind: String, Codable, Sendable {
         case photo, gif, video
@@ -23,7 +12,6 @@ struct PolusAvatarMedia: Codable, Equatable, Sendable {
 }
 
 struct PolusProfile: Codable, Equatable, Sendable {
-    var banner: String?
     var media: PolusAvatarMedia?
     var color: String?
     var status: String?
@@ -58,7 +46,6 @@ enum PolusProfileService {
         }
     }
 
-    static let catalog = (try? JSONDecoder().decode(PolusCatalog.self, from: Data(PolusBuildConfig.catalogJSON.utf8))) ?? PolusCatalog(banners: [])
     static let mediaLimit = 8 * 1024 * 1024
     static let packetLimit = mediaLimit + 2052
 
@@ -87,7 +74,7 @@ enum PolusProfileService {
 
     @MainActor
     static func save(account: String, profile: PolusProfile) {
-        let style = PolusProfile(banner: profile.banner, media: profile.media, color: profile.color, status: profile.status)
+        let style = PolusProfile(media: profile.media, color: profile.color, status: profile.status)
         let data = try? JSONEncoder().encode(LocalProfile(profile: style))
         UserDefaults.standard.set(data, forKey: self.localKey(account))
     }
@@ -137,13 +124,13 @@ enum PolusProfileService {
         let bytes = data.dropFirst(length + 4)
         if var style = packet.profile, packet.gift == nil {
             if let media = style.media {
-                guard !bytes.isEmpty, bytes.count <= self.mediaLimit,
-                      self.mediaId(Data(bytes), kind: media.kind) == media.id,
-                      (try? self.writeMedia(Data(bytes), account: account, peer: peer, media: media)) != nil else { return nil }
+                guard !bytes.isEmpty, bytes.count <= self.mediaLimit else { return nil }
+                let mediaBytes = Data(bytes)
+                guard self.mediaId(mediaBytes, kind: media.kind) == media.id,
+                      (try? self.writeMedia(mediaBytes, account: account, peer: peer, media: media)) != nil else { return nil }
             } else if !bytes.isEmpty {
                 return nil
             }
-            style.banner = self.catalog.banners.first(where: { $0.id == style.banner })?.id
             if let color = style.color, color.range(of: "^[A-F0-9]{6}$", options: .regularExpression) == nil {
                 style.color = nil
             }
@@ -180,7 +167,8 @@ enum PolusProfileService {
     }
 
     private static func writeMedia(_ data: Data, account: String, peer: String, media: PolusAvatarMedia) throws {
-        try data.write(to: self.mediaPath(account, peer: peer, media: media), options: .atomic)
+        let url = try self.mediaURL(account: account, peer: peer, media: media)
+        try data.write(to: url, options: .atomic)
     }
 
     static func storeMedia(_ data: Data, kind: PolusAvatarMedia.Kind, account: String) throws -> PolusAvatarMedia {
@@ -191,6 +179,21 @@ enum PolusProfileService {
     }
 
     static func mediaData(account: String, peer: String, media: PolusAvatarMedia) throws -> Data {
-        try Data(contentsOf: self.mediaPath(account, peer: peer, media: media))
+        try Data(contentsOf: self.mediaURL(account: account, peer: peer, media: media), options: .mappedIfSafe)
+    }
+
+    static func mediaURL(account: String, peer: String, media: PolusAvatarMedia) throws -> URL {
+        let original = try self.mediaPath(account, peer: peer, media: media)
+        guard media.kind == .video else { return original }
+        let video = original.appendingPathExtension("mp4")
+        let files = FileManager.default
+        if !files.fileExists(atPath: video.path), files.fileExists(atPath: original.path) {
+            do {
+                try files.moveItem(at: original, to: video)
+            } catch {
+                if !files.fileExists(atPath: video.path) { return original }
+            }
+        }
+        return video
     }
 }

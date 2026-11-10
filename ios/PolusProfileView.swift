@@ -90,7 +90,7 @@ final class PolusProfilePanel: UIView {
     @objc private func openHosting() { self.hosting?() }
 }
 
-final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDelegate, UIDocumentPickerDelegate {
+final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDelegate, UIDocumentPickerDelegate, UIColorPickerViewControllerDelegate {
     private let account: String
     private let balance: Int
     private var profile: PolusProfile
@@ -99,11 +99,6 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     private let bannerPreview = PolusProfileBanner(frame: .zero)
     private let previewContainer = UIView()
     private let previewAvatar = UIImageView(image: UIImage(systemName: "person.crop.circle.fill"))
-    private let banners = PolusProfileService.catalog.banners
-    private let colors: [(title: String, hex: String?)] = [
-        ("По умолчанию", nil), ("Сирень", "C4A7FF"), ("Небо", "78C8FF"),
-        ("Мята", "7EE3C4"), ("Роза", "FF9CC4"), ("Золото", "FFCD78")
-    ]
 
     init(account: String, profile: PolusProfile, balance: Int, didSave: @escaping (PolusProfile) -> Void) {
         self.account = account
@@ -148,15 +143,15 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
 
     private func updateBannerPreview() {
         self.bannerPreview.apply(self.profile, account: self.account, peer: self.account)
-        self.bannerPreview.setVisible(self.profile.banner != nil || self.profile.media != nil)
+        self.bannerPreview.setVisible(self.profile.media != nil)
     }
 
     override func numberOfSections(in tableView: UITableView) -> Int { 3 }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
         switch section {
-        case 0: return self.banners.count + 3
-        case 1: return self.colors.count + 1
+        case 0: return 3
+        case 1: return 3
         default: return 1
         }
     }
@@ -164,7 +159,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     override func tableView(_ tableView: UITableView, titleForHeaderInSection section: Int) -> String? {
         switch section {
         case 0: return "Баннер за аватаркой"
-        case 1: return "Цвет имени и статус"
+        case 1: return "Цвет ника и статус"
         default: return "Визуальные звёзды"
         }
     }
@@ -182,27 +177,29 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         switch (indexPath.section, indexPath.row) {
         case (0, 0):
             cell.textLabel?.text = "Без баннера"
-            cell.accessoryType = self.profile.banner == nil && self.profile.media == nil ? .checkmark : .none
+            cell.accessoryType = self.profile.media == nil ? .checkmark : .none
         case (0, 1):
-            cell.textLabel?.text = "Выбрать фото или видео"
-            cell.accessoryType = self.profile.media != nil && self.profile.media?.kind != .gif ? .checkmark : .none
+            cell.textLabel?.text = "Из медиатеки"
+            cell.detailTextLabel?.text = "Фото, GIF, видео"
+            cell.accessoryType = .disclosureIndicator
         case (0, 2):
-            cell.textLabel?.text = "Выбрать файл · фото, GIF, видео"
-            cell.accessoryType = self.profile.media?.kind == .gif ? .checkmark : .disclosureIndicator
-        case (0, let row):
-            let banner = self.banners[row - 3]
-            cell.textLabel?.text = "\(banner.symbol)  \(banner.title)"
-            cell.accessoryType = self.profile.banner == banner.id ? .checkmark : .none
+            cell.textLabel?.text = "Из «Файлов»"
+            cell.detailTextLabel?.text = "Фото, GIF, видео"
+            cell.accessoryType = .disclosureIndicator
         case (1, 0):
             cell.textLabel?.text = "Статус VeilGram"
             cell.detailTextLabel?.text = self.profile.status
             cell.accessoryType = .disclosureIndicator
-        case (1, let row):
-            let color = self.colors[row - 1]
-            cell.textLabel?.text = color.title
-            cell.imageView?.image = color.hex.map { _ in UIImage(systemName: "circle.fill") } ?? nil
-            cell.imageView?.tintColor = color.hex.map(polusColor)
-            cell.accessoryType = self.profile.color == color.hex ? .checkmark : .none
+        case (1, 1):
+            cell.textLabel?.text = "Цвет ника"
+            cell.detailTextLabel?.text = self.profile.color.map { "#\($0)" } ?? "По умолчанию"
+            cell.imageView?.image = UIImage(systemName: "circle.fill")
+            cell.imageView?.tintColor = self.profile.color.map(polusColor) ?? .label
+            cell.accessoryType = .disclosureIndicator
+        case (1, 2):
+            cell.textLabel?.text = "Сбросить цвет"
+            cell.textLabel?.textColor = self.profile.color == nil ? .secondaryLabel : .systemBlue
+            cell.selectionStyle = self.profile.color == nil ? .none : .default
         default:
             cell.selectionStyle = .none
             cell.textLabel?.text = "\(self.balance) ✦ VeilGram"
@@ -215,7 +212,6 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         guard !self.busy else { return }
         switch (indexPath.section, indexPath.row) {
         case (0, 0):
-            self.profile.banner = nil
             self.profile.media = nil
         case (0, 1):
             var configuration = PHPickerConfiguration()
@@ -230,9 +226,6 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
             picker.delegate = self
             self.present(picker, animated: true)
             return
-        case (0, let row):
-            self.profile.banner = self.banners[row - 3].id
-            self.profile.media = nil
         case (1, 0):
             self.textInput(title: "Статус VeilGram", value: self.profile.status) { text in
                 let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -241,16 +234,39 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
                     return
                 }
                 self.profile.status = clean.isEmpty ? nil : clean
-                self.tableView.reloadData()
+                self.tableView.reloadRows(at: [indexPath], with: .none)
             }
             return
-        case (1, let row):
-            self.profile.color = self.colors[row - 1].hex
+        case (1, 1):
+            let picker = UIColorPickerViewController()
+            picker.delegate = self
+            picker.supportsAlpha = false
+            picker.selectedColor = self.profile.color.map(polusColor) ?? .systemBlue
+            self.present(picker, animated: true)
+            return
+        case (1, 2):
+            guard self.profile.color != nil else { return }
+            self.profile.color = nil
+            self.reloadColorRows()
+            return
         default:
             return
         }
         self.updateBannerPreview()
-        self.tableView.reloadData()
+        self.tableView.reloadSections(IndexSet(integer: 0), with: .none)
+    }
+
+    func colorPickerViewController(_ viewController: UIColorPickerViewController, didSelect color: UIColor, continuously: Bool) {
+        guard !continuously, let space = CGColorSpace(name: CGColorSpace.sRGB),
+              let components = color.cgColor.converted(to: space, intent: .defaultIntent, options: nil)?.components,
+              components.count >= 3, components.prefix(3).allSatisfy(\.isFinite) else { return }
+        let rgb = components.prefix(3).map { UInt32((min(1, max(0, $0)) * 255).rounded()) }
+        self.profile.color = String(format: "%02X%02X%02X", rgb[0], rgb[1], rgb[2])
+        self.reloadColorRows()
+    }
+
+    private func reloadColorRows() {
+        self.tableView.reloadRows(at: [IndexPath(row: 1, section: 1), IndexPath(row: 2, section: 1)], with: .none)
     }
 
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
@@ -343,9 +359,8 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
 
     private func importFrame(_ url: URL, type: UTType? = nil) async throws {
         self.profile.media = try await PolusFrameImport.prepare(url, type: type, account: self.account)
-        self.profile.banner = nil
         self.updateBannerPreview()
-        self.tableView.reloadData()
+        self.tableView.reloadSections(IndexSet(integer: 0), with: .none)
     }
 
     private func textInput(title: String, value: String?, completion: @escaping (String) -> Void) {

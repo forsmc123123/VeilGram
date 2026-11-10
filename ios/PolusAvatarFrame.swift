@@ -101,7 +101,8 @@ enum PolusFrameImport {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
-            kCGImageSourceThumbnailMaxPixelSize: maximumSize
+            kCGImageSourceThumbnailMaxPixelSize: maximumSize,
+            kCGImageSourceShouldCacheImmediately: true
         ]
         return CGImageSourceCreateThumbnailAtIndex(image, index, options as CFDictionary).map { UIImage(cgImage: $0) }
     }
@@ -118,6 +119,7 @@ enum PolusFrameImport {
         var frames: [UIImage] = []
         var duration: TimeInterval = 0
         for index in 0..<count {
+            guard !Task.isCancelled else { return nil }
             guard let image = self.thumbnail(source, index: index, maximumSize: 256) else { return nil }
             let ticks = max(1, Int((PolusGIF.delay(source, index: index) / 0.04).rounded()))
             frames.append(contentsOf: repeatElement(image, count: ticks))
@@ -128,25 +130,26 @@ enum PolusFrameImport {
 }
 
 final class PolusProfileBanner: UIView {
-    private let gradient = CAGradientLayer()
+    private struct Selection: Equatable, Sendable {
+        let account: String
+        let peer: String
+        let media: PolusAvatarMedia
+    }
+
     private let image = UIImageView()
     private let shade = CAGradientLayer()
     private let fade = CAGradientLayer()
     private let videoLayer = AVPlayerLayer()
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
-    private var videoFile: URL?
     private var loadTask: Task<Void, Never>?
-    private var selection: PolusProfile = .empty
+    private var selection: Selection?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         self.isUserInteractionEnabled = false
         self.isAccessibilityElement = false
         self.clipsToBounds = true
-        self.gradient.startPoint = CGPoint(x: 0, y: 0.1)
-        self.gradient.endPoint = CGPoint(x: 1, y: 0.85)
-        self.layer.addSublayer(self.gradient)
         self.image.contentMode = .scaleAspectFill
         self.image.clipsToBounds = true
         self.addSubview(self.image)
@@ -159,13 +162,16 @@ final class PolusProfileBanner: UIView {
         self.fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
         self.fade.locations = [0, 0.74, 1]
         self.layer.mask = self.fade
+        for event in [UIApplication.didEnterBackgroundNotification, UIApplication.didBecomeActiveNotification,
+                      UIAccessibility.reduceMotionStatusDidChangeNotification] {
+            NotificationCenter.default.addObserver(self, selector: #selector(self.updatePlayback), name: event, object: nil)
+        }
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        self.gradient.frame = self.bounds
         self.image.frame = self.bounds
         self.videoLayer.frame = self.bounds
         self.shade.frame = self.bounds
@@ -173,50 +179,59 @@ final class PolusProfileBanner: UIView {
     }
 
     func apply(_ profile: PolusProfile, account: String, peer: String) {
-        guard profile.banner != self.selection.banner || profile.media != self.selection.media else { return }
-        self.selection = profile
+        let selection = profile.media.map { Selection(account: account, peer: peer, media: $0) }
+        guard self.selection != selection else { return }
+        self.selection = selection
         self.loadTask?.cancel()
         self.player?.pause()
         self.looper = nil
         self.player = nil
         self.videoLayer.player = nil
-        if let file = self.videoFile { try? FileManager.default.removeItem(at: file) }
-        self.videoFile = nil
         self.image.stopAnimating()
         self.image.animationImages = nil
         self.image.image = nil
-        let preset = PolusProfileService.catalog.banners.first(where: { $0.id == profile.banner })
-        self.gradient.colors = (preset?.colors.map(polusColor) ?? [.systemPurple, .systemIndigo]).map { $0.cgColor }
-        guard let media = profile.media else { return }
+        guard let selection else { return }
         self.loadTask = Task { @MainActor [weak self] in
-            guard let data = try? PolusProfileService.mediaData(account: account, peer: peer, media: media),
-                  !Task.isCancelled, let self else { return }
-            switch media.kind {
-            case .photo:
-                self.image.image = PolusFrameImport.photoImage(data)
-            case .gif:
-                if let animation = PolusFrameImport.gifImage(data) {
-                    self.image.image = animation.images?.first ?? animation
-                    self.image.animationImages = animation.images
-                    self.image.animationDuration = animation.duration
-                    self.updatePlayback()
-                }
-            case .video:
-                let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
-                do {
-                    try data.write(to: url, options: .atomic)
-                    let player = AVQueuePlayer()
-                    player.isMuted = true
-                    self.looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
-                    self.videoFile = url
-                    self.player = player
-                    self.videoLayer.player = player
-                    self.updatePlayback()
-                } catch {
-                    try? FileManager.default.removeItem(at: url)
-                }
+            let decode = Task.detached(priority: .userInitiated) {
+                Self.loadMedia(selection)
             }
+            let result = await withTaskCancellationHandler {
+                await decode.value
+            } onCancel: {
+                decode.cancel()
+            }
+            guard !Task.isCancelled, let self, self.selection == selection, let result else { return }
+            switch result {
+            case let .image(image):
+                self.image.image = image.images?.first ?? image
+                self.image.animationImages = image.images
+                self.image.animationDuration = image.duration
+            case let .video(url):
+                let player = AVQueuePlayer()
+                player.isMuted = true
+                self.looper = AVPlayerLooper(player: player, templateItem: AVPlayerItem(url: url))
+                self.player = player
+                self.videoLayer.player = player
+            }
+            self.updatePlayback()
         }
+    }
+
+    private enum Media: Sendable {
+        case image(UIImage)
+        case video(URL)
+    }
+
+    nonisolated private static func loadMedia(_ selection: Selection) -> Media? {
+        guard !Task.isCancelled else { return nil }
+        if selection.media.kind == .video {
+            guard let url = try? PolusProfileService.mediaURL(account: selection.account, peer: selection.peer, media: selection.media),
+                  FileManager.default.fileExists(atPath: url.path) else { return nil }
+            return .video(url)
+        }
+        guard let data = try? PolusProfileService.mediaData(account: selection.account, peer: selection.peer, media: selection.media) else { return nil }
+        let image = selection.media.kind == .gif ? PolusFrameImport.gifImage(data) : PolusFrameImport.photoImage(data)
+        return image.map(Media.image)
     }
 
     func setVisible(_ visible: Bool) {
@@ -230,8 +245,8 @@ final class PolusProfileBanner: UIView {
         self.updatePlayback()
     }
 
-    private func updatePlayback() {
-        if self.window != nil && !self.isHidden && !UIAccessibility.isReduceMotionEnabled {
+    @objc private func updatePlayback() {
+        if self.window != nil && !self.isHidden && UIApplication.shared.applicationState == .active && !UIAccessibility.isReduceMotionEnabled {
             self.player?.play()
             if self.image.animationImages != nil, !self.image.isAnimating {
                 self.image.startAnimating()
@@ -244,6 +259,5 @@ final class PolusProfileBanner: UIView {
 
     deinit {
         self.loadTask?.cancel()
-        if let file = self.videoFile { try? FileManager.default.removeItem(at: file) }
     }
 }

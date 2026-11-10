@@ -153,10 +153,15 @@ enum PolusTelegramExchange {
             userLocation: .peer(message.id.peerId), userContentType: .other).startStandalone()
         defer { fetch.dispose() }
         let dataSignal = context.engine.resources.data(id: EngineMediaResource.Id(file.resource.id)) |> filter { $0.isComplete }
-        guard let resource = await self.first(dataSignal), let size = file.size,
-              let bytes = try? Data(contentsOf: URL(fileURLWithPath: resource.path), options: .mappedIfSafe),
-              bytes.count == Int(size) else { return nil }
-        return PolusProfileService.readPacket(bytes, account: self.account(context), peer: String(message.id.peerId.id._internalGetInt64Value()))
+        guard let resource = await self.first(dataSignal), let size = file.size else { return nil }
+        let path = resource.path
+        let account = self.account(context)
+        let peer = String(message.id.peerId.id._internalGetInt64Value())
+        return await Task.detached { () -> (profile: PolusProfile?, gift: String?)? in
+            guard let bytes = try? Data(contentsOf: URL(fileURLWithPath: path), options: .mappedIfSafe),
+                  bytes.count == Int(size) else { return nil }
+            return PolusProfileService.readPacket(bytes, account: account, peer: peer)
+        }.value
     }
 
     private static func first<Value>(_ signal: Signal<Value, NoError>) async -> Value? {

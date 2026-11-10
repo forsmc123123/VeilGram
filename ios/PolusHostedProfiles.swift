@@ -5,9 +5,15 @@ import UIKit
 
 @MainActor
 enum PolusHostedProfiles {
-    private struct Session: Codable {
+    private struct Session: Codable, Hashable {
         let url: URL
         let token: String
+    }
+
+    private struct ProfileRequest: Hashable {
+        let session: Session
+        let account: String
+        let peer: String
     }
 
     private struct Catalog: Decodable { let botUsername: String }
@@ -68,6 +74,7 @@ enum PolusHostedProfiles {
 
     private static let network = URLSession(configuration: .ephemeral, delegate: HostedTransport(), delegateQueue: nil)
     private static var publications: [String: Task<Void, Error>] = [:]
+    private static var profileDownloads: [ProfileRequest: Task<PolusProfile?, Never>] = [:]
 
     static func address(account: String) -> URL? { self.session(account: account)?.url }
 
@@ -129,9 +136,22 @@ enum PolusHostedProfiles {
     }
 
     static func load(account: String, peer: String) async -> PolusProfile? {
-        guard let session = self.session(account: account),
-              let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)", token: session.token) else { return nil }
-        return PolusProfileService.readPacket(data, account: account, peer: peer)?.profile
+        guard let session = self.session(account: account) else { return nil }
+        let key = ProfileRequest(session: session, account: account, peer: peer)
+        if let download = self.profileDownloads[key] {
+            let result = await download.value
+            return self.session(account: account) == session ? result : nil
+        }
+        let download = Task<PolusProfile?, Never> {
+            guard let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)", token: session.token) else { return nil }
+            return await Task.detached {
+                PolusProfileService.readPacket(data, account: account, peer: peer)?.profile
+            }.value
+        }
+        self.profileDownloads[key] = download
+        let result = await download.value
+        self.profileDownloads[key] = nil
+        return self.session(account: account) == session ? result : nil
     }
 
     static func archive(account: String) async throws -> [ArchivedMessage] {
