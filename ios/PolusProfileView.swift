@@ -149,7 +149,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         switch section {
-        case 0: return "Фото и видео можно выбрать из медиатеки. Для оригинального GIF используй «Файлы»."
+        case 0: return "Фото, GIF и видео можно выбрать из медиатеки или «Файлов». Для длинного видео будут использованы первые 12 секунд."
         case 2: return "Баланс хранится на этом iPhone. Открой профиль человека, чтобы поделиться оформлением или отправить визуальный подарок в его личный чат."
         default: return nil
         }
@@ -204,7 +204,7 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
             self.present(picker, animated: true)
             return
         case (0, 2):
-            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.image, .movie], asCopy: true)
+            let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.gif, .image, .movie, .video], asCopy: true)
             picker.delegate = self
             self.present(picker, animated: true)
             return
@@ -232,28 +232,82 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
     }
 
     func picker(_ picker: PHPickerViewController, didFinishPicking results: [PHPickerResult]) {
-        picker.dismiss(animated: true)
-        guard let provider = results.first?.itemProvider else { return }
-        let type: UTType = provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) ? .movie : .image
-        self.perform {
-            let temporary: URL = try await withCheckedThrowingContinuation { continuation in
-                _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, error in
-                    guard let url else {
-                        continuation.resume(throwing: error ?? PolusFrameImport.ImportError.unsupported)
-                        return
-                    }
-                    let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension(url.pathExtension)
-                    do {
-                        try FileManager.default.copyItem(at: url, to: temporary)
-                        continuation.resume(returning: temporary)
-                    } catch {
-                        continuation.resume(throwing: error)
+        let provider = results.first?.itemProvider
+        picker.dismiss(animated: true) { [weak self] in
+            guard let self, let provider else { return }
+            self.perform {
+                let (temporary, type) = try await self.loadPhotoAsset(provider)
+                defer { try? FileManager.default.removeItem(at: temporary) }
+                try await self.importFrame(temporary, type: type)
+            }
+        }
+    }
+
+    private func loadPhotoAsset(_ provider: NSItemProvider) async throws -> (URL, UTType) {
+        let types = provider.registeredTypeIdentifiers.compactMap { UTType($0) }
+        let movies = types.filter { $0.conforms(to: .movie) || $0.conforms(to: .video) }
+        var candidates: [UTType]
+        if types.contains(.gif) {
+            candidates = [.gif]
+        } else if !movies.isEmpty {
+            candidates = movies
+        } else if provider.hasItemConformingToTypeIdentifier(UTType.movie.identifier) {
+            candidates = [.movie]
+        } else {
+            candidates = types.filter { $0.conforms(to: .image) }
+            if candidates.isEmpty && provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
+                candidates = [.image]
+            }
+        }
+        guard !candidates.isEmpty else { throw PolusFrameImport.ImportError.unsupported }
+        for type in candidates {
+            if let file = try await self.copyPhotoAsset(provider, type: type) {
+                return (file, type)
+            }
+            if type.conforms(to: .image) {
+                let data: Data? = await withCheckedContinuation { continuation in
+                    _ = provider.loadDataRepresentation(forTypeIdentifier: type.identifier) { bytes, _ in
+                        continuation.resume(returning: bytes)
                     }
                 }
+                if let data, !data.isEmpty {
+                    guard data.count <= PolusFrameImport.inputLimit else { throw PolusFrameImport.ImportError.sourceTooLarge }
+                    let url = Self.photoAssetTemporaryURL(type: type, sourceExtension: "")
+                    try data.write(to: url, options: .atomic)
+                    return (url, type)
+                }
             }
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            try await self.importFrame(temporary)
         }
+        throw PolusFrameImport.ImportError.unreadable
+    }
+
+    private func copyPhotoAsset(_ provider: NSItemProvider, type: UTType) async throws -> URL? {
+        try await withCheckedThrowingContinuation { continuation in
+            _ = provider.loadFileRepresentation(forTypeIdentifier: type.identifier) { url, _ in
+                guard let url else {
+                    continuation.resume(returning: nil)
+                    return
+                }
+                let temporary = Self.photoAssetTemporaryURL(type: type, sourceExtension: url.pathExtension)
+                do {
+                    if let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
+                       size > PolusFrameImport.inputLimit {
+                        throw PolusFrameImport.ImportError.sourceTooLarge
+                    }
+                    try FileManager.default.copyItem(at: url, to: temporary)
+                    continuation.resume(returning: temporary)
+                } catch {
+                    try? FileManager.default.removeItem(at: temporary)
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    nonisolated private static func photoAssetTemporaryURL(type: UTType, sourceExtension: String) -> URL {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let ext = sourceExtension.isEmpty ? type.preferredFilenameExtension ?? "" : sourceExtension
+        return ext.isEmpty ? url : url.appendingPathExtension(ext)
     }
 
     func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
@@ -265,8 +319,8 @@ final class PolusProfileEditor: UITableViewController, PHPickerViewControllerDel
         }
     }
 
-    private func importFrame(_ url: URL) async throws {
-        self.profile.media = try await PolusFrameImport.prepare(url, account: self.account)
+    private func importFrame(_ url: URL, type: UTType? = nil) async throws {
+        self.profile.media = try await PolusFrameImport.prepare(url, type: type, account: self.account)
         self.profile.banner = nil
         self.updateBannerPreview()
         self.tableView.reloadData()
