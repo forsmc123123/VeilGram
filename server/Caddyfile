@@ -1,6 +1,6 @@
 {$PROFILE_DOMAIN} {
     request_body {
-        max_size 2KB
+        max_size 8390660
     }
     reverse_proxy profiles:8080
 }

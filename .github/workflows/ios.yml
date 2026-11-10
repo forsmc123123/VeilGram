@@ -44,12 +44,14 @@ jobs:
           xcrun --sdk iphoneos swiftc -emit-module -parse-as-library -module-name TelegramCore -target arm64-apple-ios15.0 \
             -sdk "$sdk" ios/VeilGramGiftLink.swift -o .build/iphoneos/TelegramCore.swiftmodule
           xcrun --sdk iphoneos swiftc -typecheck -warnings-as-errors -target arm64-apple-ios15.0 \
-            -sdk "$sdk" -I .build/iphoneos ios/PolusProfileService.swift ios/PolusGIF.swift ios/PolusAvatarFrame.swift scripts/check_profile_packets.swift
+            -sdk "$sdk" -I .build/iphoneos ios/PolusProfileService.swift ios/PolusGIF.swift ios/PolusAvatarFrame.swift ios/PolusHostedProfiles.swift scripts/check_profile_packets.swift
       - name: Compile and package for sideloading
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
           POLUS_BUNDLE_ID: ${{ vars.POLUS_BUNDLE_ID || 'org.polus.messenger' }}
+          VEILGRAM_HOSTED_URL: ${{ vars.VEILGRAM_HOSTED_URL }}
+          VEILGRAM_CERTIFICATE_SHA256: ${{ vars.VEILGRAM_CERTIFICATE_SHA256 }}
         run: python3 -u scripts/build_ios.py ipa --build-number "$((100000 + GITHUB_RUN_NUMBER))"
       - name: Upload IPA
         id: upload_ipa

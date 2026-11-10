@@ -91,6 +91,9 @@ enum PolusTelegramExchange {
             return own
         }
         guard peer.namespace == Namespaces.Peer.CloudUser else { return .empty }
+        if let hosted = await PolusHostedProfiles.load(account: self.account(context), peer: String(peer.id._internalGetInt64Value())) {
+            return hosted
+        }
         let matches = await self.search(context: context, location: .peer(peerId: peer, fromId: peer, tags: nil,
             reactions: nil, threadId: nil, minDate: nil, maxDate: nil))
         var member = false

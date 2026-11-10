@@ -2,6 +2,8 @@ import Foundation
 import TelegramCore
 
 enum PolusBuildConfig {
+    static let hostedURL = ""
+    static let hostedCertificateHash = ""
     static let catalogJSON = """
     {"banners":[{"id":"aurora","title":"Aurora","symbol":"✦","colors":["8877FF","6699FF"]}]}
     """
