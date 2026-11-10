@@ -1,6 +1,7 @@
 import AVFoundation
 import ImageIO
 import UIKit
+import UniformTypeIdentifiers
 
 func polusColor(_ hex: String) -> UIColor {
     guard let value = UInt32(hex, radix: 16) else { return .systemIndigo }
@@ -10,24 +11,41 @@ func polusColor(_ hex: String) -> UIColor {
 enum PolusFrameImport {
     enum ImportError: LocalizedError {
         case unsupported
-        case tooLong
+        case unreadable
+        case sourceTooLarge
+        case cannotCompress
 
         var errorDescription: String? {
             switch self {
-            case .unsupported: return "Выбери фото, GIF или короткое видео. Баннер должен помещаться в 8 МБ."
-            case .tooLong: return "Выберите видео длительностью до 12 секунд."
+            case .unsupported: return "Этот формат не удалось открыть. Попробуй GIF, MP4 или MOV."
+            case .unreadable: return "Не удалось получить оригинал файла. Если он в iCloud, сначала скачай его на iPhone."
+            case .sourceTooLarge: return "Исходный файл больше 256 МБ. Выбери файл поменьше."
+            case .cannotCompress: return "Не удалось подготовить баннер до 8 МБ. Попробуй другой файл."
             }
         }
     }
 
-    static func prepare(_ url: URL, account: String) async throws -> PolusAvatarMedia {
-        let size = try url.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
-        guard size > 0, size <= 64 * 1024 * 1024 else { throw ImportError.unsupported }
-        if let image = CGImageSourceCreateWithURL(url as CFURL, nil) {
-            if CGImageSourceGetType(image) as String? == "com.compuserve.gif" {
-                let bytes = try Data(contentsOf: url)
-                guard bytes.count <= PolusProfileService.mediaLimit, self.gifImage(bytes) != nil else {
-                    throw ImportError.unsupported
+    static let inputLimit = 256 * 1024 * 1024
+
+    static func prepare(_ url: URL, type: UTType? = nil, account: String) async throws -> PolusAvatarMedia {
+        let values = try url.resourceValues(forKeys: [.fileSizeKey, .contentTypeKey])
+        if let size = values.fileSize {
+            guard size > 0 else { throw ImportError.unreadable }
+            guard size <= self.inputLimit else { throw ImportError.sourceTooLarge }
+        }
+        let fileType = type ?? values.contentType ?? UTType(filenameExtension: url.pathExtension)
+        if fileType?.conforms(to: .movie) != true, fileType?.conforms(to: .video) != true,
+           let image = CGImageSourceCreateWithURL(url as CFURL, nil),
+           let identifier = CGImageSourceGetType(image), CGImageSourceGetCount(image) > 0 {
+            if (identifier as String) == UTType.gif.identifier {
+                let bytes: Data
+                if let size = values.fileSize, size <= PolusProfileService.mediaLimit,
+                   CGImageSourceGetCount(image) <= PolusGIF.frameLimit {
+                    bytes = try Data(contentsOf: url, options: .mappedIfSafe)
+                } else if let normalized = PolusGIF.normalize(image, byteLimit: PolusProfileService.mediaLimit) {
+                    bytes = normalized
+                } else {
+                    throw ImportError.cannotCompress
                 }
                 return try PolusProfileService.storeMedia(bytes, kind: .gif, account: account)
             }
@@ -38,18 +56,32 @@ enum PolusFrameImport {
 
         let asset = AVURLAsset(url: url)
         guard let track = try await asset.loadTracks(withMediaType: .video).first else { throw ImportError.unsupported }
-        let duration = try await asset.load(.duration)
-        guard duration.seconds.isFinite, duration.seconds > 0, duration.seconds <= 12 else { throw ImportError.tooLong }
         let movie = AVMutableComposition()
         guard let video = movie.addMutableTrack(withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid) else {
             throw ImportError.unsupported
         }
         let range = try await track.load(.timeRange)
-        try video.insertTimeRange(range, of: track, at: .zero)
+        guard range.duration.seconds.isFinite, range.duration.seconds > 0 else { throw ImportError.unsupported }
+        let duration = CMTimeMinimum(range.duration, CMTime(seconds: 12, preferredTimescale: 600))
+        try video.insertTimeRange(CMTimeRange(start: range.start, duration: duration), of: track, at: .zero)
         video.preferredTransform = try await track.load(.preferredTransform)
-        guard let exporter = AVAssetExportSession(asset: movie, presetName: AVAssetExportPreset640x480) else {
-            throw ImportError.unsupported
+        for preset in [AVAssetExportPreset640x480, AVAssetExportPresetLowQuality] {
+            let data: Data
+            do {
+                data = try await self.export(movie, preset: preset)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                continue
+            }
+            return try PolusProfileService.storeMedia(data, kind: .video, account: account)
         }
+        throw ImportError.cannotCompress
+    }
+
+    private static func export(_ asset: AVAsset, preset: String) async throws -> Data {
+        guard let exporter = AVAssetExportSession(asset: asset, presetName: preset),
+              exporter.supportedFileTypes.contains(.mp4) else { throw ImportError.unsupported }
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
         defer { try? FileManager.default.removeItem(at: temporary) }
         if #available(iOS 18.0, *) {
@@ -60,7 +92,9 @@ enum PolusFrameImport {
             await exporter.export()
             guard exporter.status == .completed else { throw ImportError.unsupported }
         }
-        return try PolusProfileService.storeMedia(Data(contentsOf: temporary), kind: .video, account: account)
+        let size = try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize ?? 0
+        guard size > 0, size <= PolusProfileService.mediaLimit else { throw ImportError.cannotCompress }
+        return try Data(contentsOf: temporary)
     }
 
     private static func thumbnail(_ image: CGImageSource, index: Int, maximumSize: Int) -> UIImage? {
@@ -80,16 +114,12 @@ enum PolusFrameImport {
     static func gifImage(_ data: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let count = CGImageSourceGetCount(source)
-        guard count > 0, count <= 120 else { return nil }
+        guard count > 0, count <= PolusGIF.frameLimit else { return nil }
         var frames: [UIImage] = []
         var duration: TimeInterval = 0
         for index in 0..<count {
             guard let image = self.thumbnail(source, index: index, maximumSize: 256) else { return nil }
-            let properties = CGImageSourceCopyPropertiesAtIndex(source, index, nil) as? [String: Any]
-            let timing = properties?[kCGImagePropertyGIFDictionary as String] as? [String: Any]
-            let delay = (timing?[kCGImagePropertyGIFUnclampedDelayTime as String] as? NSNumber)?.doubleValue
-                ?? (timing?[kCGImagePropertyGIFDelayTime as String] as? NSNumber)?.doubleValue ?? 0.1
-            let ticks = Int((max(0.04, min(delay.isFinite ? delay : 0.1, 1.0)) / 0.04).rounded())
+            let ticks = max(1, Int((PolusGIF.delay(source, index: index) / 0.04).rounded()))
             frames.append(contentsOf: repeatElement(image, count: ticks))
             duration += Double(ticks) * 0.04
         }
@@ -152,6 +182,8 @@ final class PolusProfileBanner: UIView {
         self.videoLayer.player = nil
         if let file = self.videoFile { try? FileManager.default.removeItem(at: file) }
         self.videoFile = nil
+        self.image.stopAnimating()
+        self.image.animationImages = nil
         self.image.image = nil
         let preset = PolusProfileService.catalog.banners.first(where: { $0.id == profile.banner })
         self.gradient.colors = (preset?.colors.map(polusColor) ?? [.systemPurple, .systemIndigo]).map { $0.cgColor }
@@ -163,7 +195,12 @@ final class PolusProfileBanner: UIView {
             case .photo:
                 self.image.image = PolusFrameImport.photoImage(data)
             case .gif:
-                self.image.image = PolusFrameImport.gifImage(data)
+                if let animation = PolusFrameImport.gifImage(data) {
+                    self.image.image = animation.images?.first ?? animation
+                    self.image.animationImages = animation.images
+                    self.image.animationDuration = animation.duration
+                    self.updatePlayback()
+                }
             case .video:
                 let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".mp4")
                 do {
@@ -196,8 +233,12 @@ final class PolusProfileBanner: UIView {
     private func updatePlayback() {
         if self.window != nil && !self.isHidden && !UIAccessibility.isReduceMotionEnabled {
             self.player?.play()
+            if self.image.animationImages != nil, !self.image.isAnimating {
+                self.image.startAnimating()
+            }
         } else {
             self.player?.pause()
+            self.image.stopAnimating()
         }
     }
 

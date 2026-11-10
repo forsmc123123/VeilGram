@@ -49,7 +49,7 @@ def prepare(source):
 
     apply(source, ROOT / 'patches' / 'telegram-ios.patch')
     run('git', 'diff', '--check', cwd=source)
-    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift',
+    for filename in ('PolusProfileService.swift', 'PolusProfileView.swift', 'PolusAvatarFrame.swift', 'PolusGIF.swift',
                      'PolusGifts.swift', 'PolusTelegramExchange.swift'):
         shutil.copyfile(ROOT / 'ios' / filename, source / PROFILE_SOURCES / filename)
     shutil.copyfile(ROOT / 'ios' / 'PolusDeletedMessages.swift',
