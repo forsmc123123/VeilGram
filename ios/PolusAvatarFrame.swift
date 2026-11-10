@@ -14,7 +14,7 @@ enum PolusFrameImport {
 
         var errorDescription: String? {
             switch self {
-            case .unsupported: return "Выберите фото, GIF или короткое видео. Готовая рамка должна помещаться в 8 МБ."
+            case .unsupported: return "Выбери фото, GIF или короткое видео. Баннер должен помещаться в 8 МБ."
             case .tooLong: return "Выберите видео длительностью до 12 секунд."
             }
         }
@@ -97,10 +97,11 @@ enum PolusFrameImport {
     }
 }
 
-final class PolusAvatarFrame: UIView {
+final class PolusProfileBanner: UIView {
     private let gradient = CAGradientLayer()
     private let image = UIImageView()
-    private let ring = CAShapeLayer()
+    private let shade = CAGradientLayer()
+    private let fade = CAGradientLayer()
     private let videoLayer = AVPlayerLayer()
     private var player: AVQueuePlayer?
     private var looper: AVPlayerLooper?
@@ -112,16 +113,22 @@ final class PolusAvatarFrame: UIView {
         super.init(frame: frame)
         self.isUserInteractionEnabled = false
         self.isAccessibilityElement = false
-        self.layer.mask = self.ring
-        self.ring.fillRule = .evenOdd
-        self.gradient.startPoint = CGPoint(x: 0, y: 0)
-        self.gradient.endPoint = CGPoint(x: 1, y: 1)
+        self.clipsToBounds = true
+        self.gradient.startPoint = CGPoint(x: 0, y: 0.1)
+        self.gradient.endPoint = CGPoint(x: 1, y: 0.85)
         self.layer.addSublayer(self.gradient)
         self.image.contentMode = .scaleAspectFill
         self.image.clipsToBounds = true
         self.addSubview(self.image)
         self.videoLayer.videoGravity = .resizeAspectFill
         self.layer.addSublayer(self.videoLayer)
+        self.shade.colors = [UIColor.black.withAlphaComponent(0.5).cgColor, UIColor.clear.cgColor,
+            UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.72).cgColor]
+        self.shade.locations = [0, 0.27, 0.50, 1]
+        self.layer.addSublayer(self.shade)
+        self.fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
+        self.fade.locations = [0, 0.74, 1]
+        self.layer.mask = self.fade
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is unavailable") }
@@ -131,10 +138,8 @@ final class PolusAvatarFrame: UIView {
         self.gradient.frame = self.bounds
         self.image.frame = self.bounds
         self.videoLayer.frame = self.bounds
-        self.ring.frame = self.bounds
-        let path = UIBezierPath(ovalIn: self.bounds)
-        path.append(UIBezierPath(ovalIn: self.bounds.insetBy(dx: 6, dy: 6)))
-        self.ring.path = path.cgPath
+        self.shade.frame = self.bounds
+        self.fade.frame = self.bounds
     }
 
     func apply(_ profile: PolusProfile, account: String, peer: String) {

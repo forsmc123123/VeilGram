@@ -23,9 +23,15 @@ enum PolusTelegramExchange {
     }
 
     @MainActor
+    static func topUp(_ context: AccountContext) {
+        UserDefaults.standard.removeObject(forKey: self.walletKey(context))
+    }
+
+    @MainActor
     static func shareProfile(context: AccountContext, peer: EnginePeer.Id) async throws {
         var profile = PolusProfileService.localProfile(self.account(context))
-        profile.received = await self.receivedGifts(context: context)
+        let received = await self.receivedGifts(context: context)
+        profile.received = PolusProfileService.mergeGifts(PolusProfileService.showcase(self.account(context)), received)
         let data = try PolusProfileService.packet(profile: profile, gift: nil, account: self.account(context))
         try await self.enqueue(context: context, peer: peer, name: self.profileFile, caption: "👻 Мой профиль VeilGram", data: data)
     }
@@ -150,6 +156,17 @@ enum PolusTelegramExchange {
 }
 
 public enum VeilGramChatDecoration {
+    @MainActor
+    public static func installGiftActions() {
+        VeilGramVisualGiftActions.current = VeilGramVisualGiftActions(
+            balance: PolusTelegramExchange.balance,
+            topUp: PolusTelegramExchange.topUp,
+            cost: { $0.polusCost },
+            send: { context, peer, gift in
+                try await PolusTelegramExchange.sendGift(context: context, peer: peer, item: gift.polusID, title: gift.polusTitle)
+            })
+    }
+
     @MainActor
     public static func load(context: AccountContext, peer: EnginePeer.Id) async -> (member: Bool, color: UInt32?) {
         let profile = await PolusTelegramExchange.load(context: context, peer: peer)

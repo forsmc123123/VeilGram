@@ -25,6 +25,11 @@ struct CheckProfilePackets {
         precondition(PolusProfileService.readPacket(ambiguous, account: account, peer: peer) == nil)
         let bogusGift = try PolusProfileService.packet(profile: nil, gift: "gift:abc", account: account)
         precondition(PolusProfileService.readPacket(bogusGift, account: account, peer: peer) == nil)
+        precondition(PolusProfileService.collectibleSlug("https://t.me/nft/PlushPepe-42?single") == "PlushPepe-42")
+        precondition(PolusProfileService.collectibleSlug("tg://nft?slug=PlushPepe-42") == "PlushPepe-42")
+        precondition(PolusProfileService.collectibleSlug("https://example.com/nft/PlushPepe-42") == nil)
+        precondition(PolusProfileService.mergeGifts(["gift:123", "nft:PlushPepe-42"], ["gift:123", "invalid"]) ==
+            ["gift:123", "nft:PlushPepe-42"])
         print("VeilGram exchange packets passed")
     }
 }

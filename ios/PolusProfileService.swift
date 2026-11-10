@@ -50,7 +50,7 @@ enum PolusProfileService {
 
         var errorDescription: String? {
             switch self {
-            case .invalidMedia: return "Не удалось открыть рамку. Выбери фото, GIF или видео размером до 8 МБ."
+            case .invalidMedia: return "Не удалось открыть баннер. Выбери фото, GIF или видео размером до 8 МБ."
             case .insufficientStars: return "Не хватает визуальных звёзд VeilGram."
             case .couldNotSend: return "Не удалось добавить сообщение в очередь Telegram. Проверь личный чат с получателем."
             }
@@ -62,6 +62,21 @@ enum PolusProfileService {
     static let packetLimit = mediaLimit + 2052
 
     private static func localKey(_ account: String) -> String { "polus.profile.\(account)" }
+
+    private static func showcaseKey(_ account: String) -> String { "polus.showcase.\(account)" }
+
+    static func showcase(_ account: String) -> [String] {
+        UserDefaults.standard.stringArray(forKey: self.showcaseKey(account)) ?? []
+    }
+
+    static func setShowcase(_ gifts: [String], account: String) {
+        UserDefaults.standard.set(gifts, forKey: self.showcaseKey(account))
+    }
+
+    static func mergeGifts(_ first: [String], _ second: [String]) -> [String] {
+        var seen = Set<String>()
+        return Array((first + second).filter { self.giftCost($0) != nil && seen.insert($0).inserted }.prefix(18))
+    }
 
     static func localProfile(_ account: String) -> PolusProfile {
         guard let data = UserDefaults.standard.data(forKey: self.localKey(account)),
@@ -80,6 +95,24 @@ enum PolusProfileService {
         if id.range(of: "^gift:[1-9][0-9]{0,18}$", options: .regularExpression) != nil { return 25 }
         if id.range(of: "^nft:[A-Za-z0-9]{1,60}-[1-9][0-9]{0,11}$", options: .regularExpression) != nil { return 100 }
         return nil
+    }
+
+    static func collectibleSlug(_ input: String) -> String? {
+        let value = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        if self.giftCost("nft:" + value) != nil { return value }
+        let urlText = value.lowercased().hasPrefix("t.me/") ? "https://" + value : value
+        guard let url = URLComponents(string: urlText) else { return nil }
+        let slug: String?
+        if url.scheme == "tg", url.host?.lowercased() == "nft" {
+            slug = url.queryItems?.first(where: { $0.name == "slug" })?.value
+        } else if url.scheme == "https", url.host?.lowercased() == "t.me" {
+            let path = url.path.split(separator: "/")
+            slug = path.count == 2 && path.first == "nft" ? String(path[1]) : nil
+        } else {
+            slug = nil
+        }
+        guard let slug, self.giftCost("nft:" + slug) != nil else { return nil }
+        return slug
     }
 
     static func packet(profile: PolusProfile?, gift: String?, account: String) throws -> Data {
@@ -119,7 +152,7 @@ enum PolusProfileService {
                 style.status = nil
             }
             style.member = true
-            style.received = style.received.map { Array($0.filter { self.giftCost($0) != nil }.prefix(6)) }
+            style.received = style.received.map { self.mergeGifts($0, []) }
             return (style, nil)
         }
         if packet.profile == nil, let gift = packet.gift, self.giftCost(gift) != nil, bytes.isEmpty {
