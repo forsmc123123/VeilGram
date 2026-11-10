@@ -1,4 +1,5 @@
 import Foundation
+import TelegramCore
 
 enum PolusBuildConfig {
     static let catalogJSON = """
