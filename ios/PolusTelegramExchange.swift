@@ -3,7 +3,6 @@ import AccountContext
 import SwiftSignalKit
 import TelegramCore
 
-@MainActor
 enum PolusTelegramExchange {
     private static let profileFile = "VeilGram.vgprofile"
     private static let giftFile = "VeilGram.vggift"
@@ -23,6 +22,7 @@ enum PolusTelegramExchange {
         return max(0, self.allowance - spent)
     }
 
+    @MainActor
     static func shareProfile(context: AccountContext, peer: EnginePeer.Id) async throws {
         var profile = PolusProfileService.localProfile(self.account(context))
         profile.received = await self.receivedGifts(context: context)
@@ -30,6 +30,7 @@ enum PolusTelegramExchange {
         try await self.enqueue(context: context, peer: peer, name: self.profileFile, caption: "👻 Мой профиль VeilGram", data: data)
     }
 
+    @MainActor
     static func sendGift(context: AccountContext, peer: EnginePeer.Id, item: String, title: String) async throws {
         guard let cost = PolusProfileService.giftCost(item), self.balance(context) >= cost else {
             throw PolusProfileService.ServiceError.insufficientStars
@@ -64,6 +65,7 @@ enum PolusTelegramExchange {
               ids.contains(where: { $0 != nil }) else { throw PolusProfileService.ServiceError.couldNotSend }
     }
 
+    @MainActor
     static func load(context: AccountContext, peer: EnginePeer.Id) async -> PolusProfile {
         if peer == context.account.peerId {
             let gifts = await self.receivedGifts(context: context)

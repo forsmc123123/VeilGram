@@ -33,6 +33,8 @@ jobs:
           swiftc -frontend -parse ios/*.swift
           swiftc ios/PolusProfileService.swift scripts/check_profile_packets.swift -o .build/check-profile-packets
           .build/check-profile-packets
+          xcrun --sdk iphoneos swiftc -typecheck -warnings-as-errors -target arm64-apple-ios15.0 \
+            -sdk "$(xcrun --sdk iphoneos --show-sdk-path)" ios/PolusProfileService.swift ios/PolusAvatarFrame.swift scripts/check_profile_packets.swift
       - name: Compile and package for sideloading
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}

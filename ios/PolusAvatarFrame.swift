@@ -2,6 +2,11 @@ import AVFoundation
 import ImageIO
 import UIKit
 
+func polusColor(_ hex: String) -> UIColor {
+    guard let value = UInt32(hex, radix: 16) else { return .systemIndigo }
+    return UIColor(red: CGFloat((value >> 16) & 255) / 255, green: CGFloat((value >> 8) & 255) / 255, blue: CGFloat(value & 255) / 255, alpha: 1)
+}
+
 enum PolusFrameImport {
     enum ImportError: LocalizedError {
         case unsupported
@@ -67,6 +72,11 @@ enum PolusFrameImport {
         return CGImageSourceCreateThumbnailAtIndex(image, index, options as CFDictionary).map { UIImage(cgImage: $0) }
     }
 
+    static func photoImage(_ data: Data) -> UIImage? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
+        return self.thumbnail(source, index: 0, maximumSize: 640)
+    }
+
     static func gifImage(_ data: Data) -> UIImage? {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil) else { return nil }
         let count = CGImageSourceGetCount(source)
@@ -79,7 +89,7 @@ enum PolusFrameImport {
             let timing = properties?[kCGImagePropertyGIFDictionary as String] as? [String: Any]
             let delay = (timing?[kCGImagePropertyGIFUnclampedDelayTime as String] as? NSNumber)?.doubleValue
                 ?? (timing?[kCGImagePropertyGIFDelayTime as String] as? NSNumber)?.doubleValue ?? 0.1
-            let ticks = Int((max(0.04, min(delay, 1.0)) / 0.04).rounded())
+            let ticks = Int((max(0.04, min(delay.isFinite ? delay : 0.1, 1.0)) / 0.04).rounded())
             frames.append(contentsOf: repeatElement(image, count: ticks))
             duration += Double(ticks) * 0.04
         }
@@ -146,7 +156,7 @@ final class PolusAvatarFrame: UIView {
                   !Task.isCancelled, let self else { return }
             switch media.kind {
             case .photo:
-                self.image.image = UIImage(data: data)
+                self.image.image = PolusFrameImport.photoImage(data)
             case .gif:
                 self.image.image = PolusFrameImport.gifImage(data)
             case .video:
