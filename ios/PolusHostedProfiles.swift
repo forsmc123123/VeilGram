@@ -288,7 +288,7 @@ final class PolusHostingScreen: UITableViewController {
                 let url = try PolusHostedProfiles.address(self.serverField.text ?? "")
                 if indexPath.row == 1 {
                     let link = try await PolusHostedProfiles.bot(at: url)
-                    UIApplication.shared.open(link)
+                    _ = await UIApplication.shared.open(link)
                 } else {
                     try await PolusHostedProfiles.connect(account: self.account, url: url, code: self.codeField.text ?? "")
                     self.codeField.text = nil
