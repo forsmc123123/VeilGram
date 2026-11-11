@@ -44,9 +44,8 @@ final class PolusDeletedArchiveScreen: UITableViewController {
 
     @objc private func reloadArchive() {
         self.request?.cancel()
-        self.load.set((self.context.account.postbox.transaction { transaction in
-            PolusDeletedArchive.records(transaction: transaction)
-        } |> deliverOnMainQueue).start(next: { [weak self] records in
+        self.load.set((self.context.engine.messages.polusDeletedArchiveRecords()
+        |> deliverOnMainQueue).start(next: { [weak self] records in
             guard let self else { return }
             let local = records.map { Record(chat: $0.chat, timestamp: $0.timestamp, text: $0.text) }
             self.records = local

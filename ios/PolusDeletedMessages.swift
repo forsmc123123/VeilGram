@@ -1,5 +1,6 @@
 import Foundation
 import Postbox
+import SwiftSignalKit
 
 public struct PolusDeletedRecord: Codable {
     public let id: MessageId
@@ -25,7 +26,7 @@ public struct PolusDeletedRecord: Codable {
     }
 }
 
-public enum PolusDeletedArchive {
+private enum PolusDeletedArchive {
     private static let key = ItemCacheEntryId(collectionId: -101, key: ValueBoxKey("veilgram.deleted.v1"))
     private static let limit = 1000
 
@@ -34,7 +35,7 @@ public enum PolusDeletedArchive {
         var records: [PolusDeletedRecord] = []
     }
 
-    public static func records(transaction: Transaction) -> [PolusDeletedRecord] {
+    static func records(transaction: Transaction) -> [PolusDeletedRecord] {
         var archive = self.read(transaction)
         if !archive.migrated {
             var previous: [PolusDeletedRecord] = []
@@ -72,6 +73,14 @@ public enum PolusDeletedArchive {
     private static func write(_ archive: Archive, _ transaction: Transaction) {
         if let entry = CodableEntry(archive) {
             transaction.putItemCacheEntry(id: self.key, entry: entry)
+        }
+    }
+}
+
+public extension TelegramEngine.Messages {
+    func polusDeletedArchiveRecords() -> Signal<[PolusDeletedRecord], NoError> {
+        self.account.postbox.transaction { transaction in
+            PolusDeletedArchive.records(transaction: transaction)
         }
     }
 }
