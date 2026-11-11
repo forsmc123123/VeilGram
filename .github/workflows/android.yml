@@ -1,0 +1,60 @@
+name: Build VeilGram for Android
+
+on:
+  push:
+    branches: [codex/android]
+    paths: ['android/**', '.github/workflows/android.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  apk:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install Android SDK components
+        run: |
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.2.12479018' 'cmake;3.22.1'
+      - name: Prepare the Telegram Android source
+        env:
+          TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
+          TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
+          VEILGRAM_ANDROID_GOOGLE_SERVICES: ${{ secrets.VEILGRAM_ANDROID_GOOGLE_SERVICES }}
+        run: |
+          git init telegram-android
+          git -C telegram-android fetch --depth=1 https://github.com/DrKLO/Telegram.git 7be672ead283d022812d75c729d3a04dd4c2a2c6
+          git -C telegram-android checkout --detach FETCH_HEAD
+          git -C telegram-android submodule update --init --recursive --depth=1 --jobs=8
+          node android/prepare.mjs telegram-android
+      - name: Build and verify signed APK
+        working-directory: telegram-android
+        env:
+          VEILGRAM_ANDROID_KEYSTORE: ${{ secrets.VEILGRAM_ANDROID_KEYSTORE }}
+          VEILGRAM_ANDROID_KEY_PASSWORD: ${{ secrets.VEILGRAM_ANDROID_KEY_PASSWORD }}
+        run: |
+          : "${VEILGRAM_ANDROID_KEYSTORE:?Add the Android keystore secret}"
+          : "${VEILGRAM_ANDROID_KEY_PASSWORD:?Add the Android signing password secret}"
+          printf '%s' "$VEILGRAM_ANDROID_KEYSTORE" | base64 -d > TMessagesProj/config/release.keystore
+          chmod 600 TMessagesProj/config/release.keystore
+          ./gradlew --no-daemon --max-workers=3 :TMessagesProj_AppStandalone:assembleAfatStandalone \
+            -PRELEASE_KEY_ALIAS=veilgram \
+            -PRELEASE_STORE_PASSWORD="$VEILGRAM_ANDROID_KEY_PASSWORD" \
+            -PRELEASE_KEY_PASSWORD="$VEILGRAM_ANDROID_KEY_PASSWORD"
+          mkdir -p ../out
+          cp TMessagesProj_AppStandalone/build/outputs/apk/afat/standalone/app.apk ../out/VeilGram-arm64.apk
+          "$ANDROID_HOME/build-tools/36.0.0/apksigner" verify ../out/VeilGram-arm64.apk
+      - uses: actions/upload-artifact@v7
+        with:
+          name: VeilGram-Android
+          path: out/VeilGram-arm64.apk
+          if-no-files-found: error
+          compression-level: 0
