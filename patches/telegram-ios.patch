@@ -1466,7 +1466,7 @@ index 17119cc3..12844c3a 100644
  import Intents
  import TelegramPresentationData
  import TelegramUIPreferences
-@@ -323,6 +324,45 @@ final class AuthorizedApplicationContext {
+@@ -323,6 +324,49 @@ final class AuthorizedApplicationContext {
                  return
              }
  
@@ -1490,8 +1490,12 @@ index 17119cc3..12844c3a 100644
 +                    let peerId = message.id.peerId.toInt64()
 +                    guard notifiedPeers.insert(peerId).inserted else { continue }
 +                    let content = UNMutableNotificationContent()
-+                    content.title = "VeilGram"
-+                    content.body = "Новое сообщение"
++                    let settings = context.currentContentSettings.with { $0 }
++                    let chat = message.peers[message.id.peerId].map { EnginePeer($0) }
++                    let preview = self?.inAppNotificationSettings?.displayPreviews == true && !message.flags.contains(.CopyProtected) && !message.text.isEmpty && message.media.isEmpty && !message.attributes.contains(where: { $0 is TextEntitiesMessageAttribute })
++                        && message.restrictionReason(platform: "ios", contentSettings: settings) == nil && chat?.restrictionText(platform: "ios", contentSettings: settings) == nil
++                    content.title = preview ? (chat?.compactDisplayTitle ?? "VeilGram") : "VeilGram"
++                    content.body = preview ? String(message.text.prefix(160)) : "Новое сообщение"
 +                    content.threadIdentifier = "\(accountId):\(peerId)"
 +                    content.categoryIdentifier = "c"
 +                    if playSound { content.sound = .default }
