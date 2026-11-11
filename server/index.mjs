@@ -19,6 +19,16 @@ function reply(response, status, value) {
   response.end(JSON.stringify(value));
 }
 
+function cached(request, response, etag, contentType, cacheControl, bytes) {
+  const headers = { ETag: etag, 'Cache-Control': cacheControl, Vary: 'Authorization' };
+  if (request.headers['if-none-match'] === etag) {
+    response.writeHead(304, headers);
+    return response.end();
+  }
+  response.writeHead(200, { ...headers, 'Content-Type': contentType, 'Content-Length': bytes.byteLength });
+  return response.end(bytes);
+}
+
 async function readBytes(request, limit) {
   const chunks = [];
   let size = 0;
@@ -87,11 +97,12 @@ export function profileServer(store, botUsername, { tls, collector } = {}) {
       const peerRoute = /^\/v1\/profiles\/([1-9][0-9]{0,15})$/.exec(url);
       const isSave = method === 'PUT' && url === '/v1/me';
       const appearancePeer = method === 'GET' && /^\/v1\/appearance\/([1-9][0-9]{0,15})$/.exec(url);
+      const appearancePart = method === 'GET' && /^\/v1\/appearance\/([1-9][0-9]{0,15})\/(metadata|media\/([a-f0-9]{64}))$/.exec(url);
       const isAppearanceSave = method === 'PUT' && url === '/v1/appearance/me';
       const isArchive = method === 'GET' && url === '/v1/deleted';
       const isPair = ['GET', 'POST', 'DELETE'].includes(method) && url === '/v1/deleted/connection';
       const isPassword = method === 'POST' && url === '/v1/deleted/password';
-      if (!(method === 'GET' && peerRoute) && !isSave && !appearancePeer && !isAppearanceSave && !isArchive && !isPair && !isPassword) {
+      if (!(method === 'GET' && peerRoute) && !isSave && !appearancePeer && !appearancePart && !isAppearanceSave && !isArchive && !isPair && !isPassword) {
         return reply(response, 404, { error: 'not_found' });
       }
       const bearer = /^Bearer ([\w-]{43})$/.exec(request.headers.authorization ?? '');
@@ -122,6 +133,21 @@ export function profileServer(store, botUsername, { tls, collector } = {}) {
         if (!validAppearance(packet)) return reply(response, 400, { error: 'invalid_appearance' });
         store.saveAppearance(owner, packet);
         return reply(response, 200, { saved: true });
+      }
+      if (appearancePart) {
+        const [, peer, part, mediaId] = appearancePart;
+        const prefix = store.appearancePrefix(peer);
+        if (!prefix) return reply(response, 404, { error: 'profile_not_found' });
+        const offset = Buffer.from(prefix.buffer, prefix.byteOffset, prefix.byteLength).readUInt32BE(0) + 4;
+        const header = prefix.subarray(4, offset);
+        if (part === 'metadata') {
+          const etag = `"${createHash('sha256').update(header).digest('hex')}"`;
+          return cached(request, response, etag, 'application/json', 'private, max-age=30', header);
+        }
+        const { profile } = JSON.parse(Buffer.from(header));
+        if (profile.media?.id !== mediaId) return reply(response, 404, { error: 'banner_not_found' });
+        const bytes = store.appearanceMedia(peer, offset);
+        return cached(request, response, `"${mediaId}"`, 'application/octet-stream', 'private, max-age=31536000, immutable', bytes);
       }
       if (appearancePeer) {
         const packet = store.appearance(appearancePeer[1]);
@@ -189,15 +215,29 @@ async function pollBot(token, store) {
 
 async function main() {
   if (existsSync('.env')) process.loadEnvFile();
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (token && !/^\d+:[\w-]+$/.test(token)) throw new Error('Invalid bot token.');
-  const bot = token ? await telegram(token, 'getMe') : undefined;
-  if (token && !bot?.username) throw new Error('Bot username is unavailable.');
+  const [command, peer] = process.argv.slice(2);
+  if (command && (command !== 'invite' || !validPeer(peer) || process.argv.length !== 4)) {
+    throw new Error('Usage: node index.mjs [invite TELEGRAM_ID]');
+  }
   const database = resolve(process.env.PROFILE_DATABASE ?? 'data/profiles.sqlite');
   mkdirSync(dirname(database), { recursive: true });
   const archiveKey = process.env.ARCHIVE_KEY;
   if (archiveKey && !/^[a-f0-9]{64}$/i.test(archiveKey)) throw new Error('Invalid archive key.');
   const store = createStore(database, archiveKey ? Buffer.from(archiveKey, 'hex') : undefined);
+  if (command === 'invite') {
+    try {
+      const code = store.issueCode(peer);
+      if (!code) throw new Error('A code was issued recently. Wait 30 seconds before replacing it.');
+      console.log(code);
+    } finally {
+      store.close();
+    }
+    return;
+  }
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  if (token && !/^\d+:[\w-]+$/.test(token)) throw new Error('Invalid bot token.');
+  const bot = token ? await telegram(token, 'getMe') : undefined;
+  if (token && !bot?.username) throw new Error('Bot username is unavailable.');
   const port = Number(process.env.PORT ?? process.env.SERVER_PORT ?? 8080);
   const tls = process.env.TLS_CERT && process.env.TLS_KEY
     ? { cert: readFileSync(process.env.TLS_CERT), key: readFileSync(process.env.TLS_KEY) }
@@ -211,8 +251,8 @@ async function main() {
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
-  main().catch(() => {
-    console.error('Could not start the profile service. Check the bot token, Telegram connection and database path.');
+  main().catch((error) => {
+    console.error(process.argv[2] ? error.message : 'Could not start the profile service. Check the database path and optional bot configuration.');
     process.exitCode = 1;
   });
 }

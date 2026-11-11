@@ -16,7 +16,7 @@ enum PolusHostedProfiles {
         let peer: String
     }
 
-    private struct Catalog: Decodable { let botUsername: String }
+    private struct ServerError: Decodable { let error: String }
     private struct Access: Decodable { let token: String }
     private struct Code: Encodable { let peer: String; let code: String }
     private struct Password: Encodable { let password: String }
@@ -30,13 +30,13 @@ enum PolusHostedProfiles {
         let qr: String?
     }
     private enum Failure: LocalizedError {
-        case invalidAddress, invalidResponse, authentication, storage
+        case invalidAddress, invalidResponse, authentication, storage, missingEndpoint
 
         var errorDescription: String? {
             switch self {
             case .invalidAddress: return "Введи HTTPS-адрес сервера VeilGram."
-            case .invalidResponse: return "Сервер VeilGram не принял запрос."
-            case .authentication: return "Код истёк или не подходит. Запроси новый код у бота."
+            case .invalidResponse, .missingEndpoint: return "Сервер VeilGram не принял запрос."
+            case .authentication: return "Код истёк или не подходит. Запроси новый код у администратора."
             case .storage: return "Не удалось сохранить подключение в связке ключей iPhone."
             }
         }
@@ -87,14 +87,6 @@ enum PolusHostedProfiles {
         return url
     }
 
-    static func bot(at url: URL) async throws -> URL {
-        let data = try await self.request(url: url, path: "v1/catalog")
-        let bot = try JSONDecoder().decode(Catalog.self, from: data).botUsername
-        guard bot.range(of: "^[A-Za-z0-9_]{5,32}$", options: .regularExpression) != nil,
-              let link = URL(string: "https://t.me/\(bot)") else { throw Failure.invalidResponse }
-        return link
-    }
-
     static func connect(account: String, url: URL, code: String) async throws {
         let encoded = try JSONEncoder().encode(Code(peer: account, code: code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()))
         let data = try await self.request(url: url, path: "v1/session", method: "POST", body: encoded, contentType: "application/json")
@@ -143,15 +135,32 @@ enum PolusHostedProfiles {
             return self.session(account: account) == session ? result : nil
         }
         let download = Task<PolusProfile?, Never> {
-            guard let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)", token: session.token) else { return nil }
-            return await Task.detached {
-                PolusProfileService.readPacket(data, account: account, peer: peer)?.profile
-            }.value
+            do {
+                let data = try await self.request(url: session.url, path: "v1/appearance/\(peer)/metadata", token: session.token)
+                return PolusProfileService.readHostedMetadata(data)
+            } catch Failure.missingEndpoint {
+                guard let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)", token: session.token) else { return nil }
+                return await Task.detached { PolusProfileService.readPacket(data, account: account, peer: peer)?.profile }.value
+            } catch {
+                return nil
+            }
         }
         self.profileDownloads[key] = download
         let result = await download.value
         self.profileDownloads[key] = nil
         return self.session(account: account) == session ? result : nil
+    }
+
+    static func needsMedia(account: String, peer: String, media: PolusAvatarMedia) -> Bool {
+        guard let url = try? PolusProfileService.mediaURL(account: account, peer: peer, media: media) else { return true }
+        return !FileManager.default.fileExists(atPath: url.path)
+    }
+
+    static func fetchMedia(account: String, peer: String, media: PolusAvatarMedia) async -> Bool {
+        guard let session = self.session(account: account),
+              let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)/media/\(media.id)", token: session.token),
+              self.session(account: account) == session else { return false }
+        return await Task.detached { (try? PolusProfileService.storeHostedMedia(data, account: account, peer: peer, media: media)) != nil }.value
     }
 
     static func archive(account: String) async throws -> [ArchivedMessage] {
@@ -198,6 +207,7 @@ enum PolusHostedProfiles {
         let (data, response) = try await self.network.data(for: request)
         guard let status = (response as? HTTPURLResponse)?.statusCode else { throw Failure.invalidResponse }
         if status == 401 { throw Failure.authentication }
+        if status == 404, (try? JSONDecoder().decode(ServerError.self, from: data).error) == "not_found" { throw Failure.missingEndpoint }
         guard status == 200, data.count <= PolusProfileService.packetLimit else { throw Failure.invalidResponse }
         return data
     }
@@ -223,7 +233,7 @@ final class PolusHostingScreen: UITableViewController {
         self.serverField.placeholder = "https://адрес-сервера"
         self.serverField.keyboardType = .URL
         self.serverField.text = PolusHostedProfiles.address(account: self.account)?.absoluteString ?? PolusBuildConfig.hostedURL
-        self.codeField.placeholder = "Код из бота"
+        self.codeField.placeholder = "Одноразовый код"
         self.codeField.autocapitalizationType = .allCharacters
         self.codeField.textContentType = .oneTimeCode
         for field in [self.serverField, self.codeField] {
@@ -234,14 +244,14 @@ final class PolusHostingScreen: UITableViewController {
     @objc private func close() { self.dismiss(animated: true) }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        PolusHostedProfiles.address(account: self.account) == nil ? 4 : 2
+        PolusHostedProfiles.address(account: self.account) == nil ? 3 : 2
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
         if let url = PolusHostedProfiles.address(account: self.account) {
             return "Подключён сервер \(url.host ?? url.absoluteString)."
         }
-        return "Сервер хранит баннер, цвет, статус и витрину профиля. Открой бота, отправь /code и введи полученный код."
+        return "Telegram ID: \(self.account). Попроси администратора сервера выдать одноразовый код для этого ID."
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
@@ -249,7 +259,7 @@ final class PolusHostingScreen: UITableViewController {
         if PolusHostedProfiles.address(account: self.account) != nil {
             cell.textLabel?.text = indexPath.row == 0 ? "Опубликовать оформление" : "Отключить сервер"
             cell.textLabel?.textColor = indexPath.row == 0 ? .systemBlue : .systemRed
-        } else if indexPath.row == 0 || indexPath.row == 2 {
+        } else if indexPath.row == 0 || indexPath.row == 1 {
             let field = indexPath.row == 0 ? self.serverField : self.codeField
             cell.contentView.addSubview(field)
             field.translatesAutoresizingMaskIntoConstraints = false
@@ -261,7 +271,7 @@ final class PolusHostingScreen: UITableViewController {
             ])
             cell.selectionStyle = .none
         } else {
-            cell.textLabel?.text = indexPath.row == 1 ? "Открыть бота" : "Подключить"
+            cell.textLabel?.text = "Подключить"
             cell.textLabel?.textColor = .systemBlue
         }
         return cell
@@ -275,7 +285,7 @@ final class PolusHostingScreen: UITableViewController {
             tableView.reloadData()
             return
         }
-        guard PolusHostedProfiles.address(account: self.account) != nil || indexPath.row == 1 || indexPath.row == 3 else { return }
+        guard PolusHostedProfiles.address(account: self.account) != nil || indexPath.row == 2 else { return }
         self.busy = true
         Task { @MainActor in
             defer { self.busy = false }
@@ -286,16 +296,11 @@ final class PolusHostingScreen: UITableViewController {
                     return
                 }
                 let url = try PolusHostedProfiles.address(self.serverField.text ?? "")
-                if indexPath.row == 1 {
-                    let link = try await PolusHostedProfiles.bot(at: url)
-                    _ = await UIApplication.shared.open(link)
-                } else {
-                    try await PolusHostedProfiles.connect(account: self.account, url: url, code: self.codeField.text ?? "")
-                    self.codeField.text = nil
-                    self.tableView.reloadData()
-                    try await PolusHostedProfiles.publish(account: self.account)
-                    self.show("Сервер подключён, оформление опубликовано.")
-                }
+                try await PolusHostedProfiles.connect(account: self.account, url: url, code: self.codeField.text ?? "")
+                self.codeField.text = nil
+                self.tableView.reloadData()
+                try await PolusHostedProfiles.publish(account: self.account)
+                self.show("Сервер подключён, оформление опубликовано.")
             } catch {
                 self.show(error.localizedDescription)
             }

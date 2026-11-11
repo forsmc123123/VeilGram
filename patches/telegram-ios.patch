@@ -1061,9 +1061,9 @@ index 463ab663..8137f363 100644
 +        Task { @MainActor [weak self] in
 +            guard let self else { return }
 +            defer { self.polusLoading = false }
-+            let profile = await PolusTelegramExchange.load(context: self.context, peer: self.peerId)
-+            self.applyPolusProfile(profile, account: String(self.context.account.peerId.id._internalGetInt64Value()),
-+                peer: String(self.peerId.id._internalGetInt64Value()))
++            let account = String(self.context.account.peerId.id._internalGetInt64Value()), peer = String(self.peerId.id._internalGetInt64Value())
++            let profile = await PolusTelegramExchange.load(context: self.context, peer: self.peerId, onMetadata: { [weak self] profile in self?.applyPolusProfile(profile, account: account, peer: peer) })
++            self.applyPolusProfile(profile, account: account, peer: peer)
 +        }
 +    }
 +

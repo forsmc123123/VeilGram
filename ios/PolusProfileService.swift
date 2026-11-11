@@ -147,6 +147,22 @@ enum PolusProfileService {
         return nil
     }
 
+    static func readHostedMetadata(_ data: Data) -> PolusProfile? {
+        guard data.count <= 2048, let packet = try? JSONDecoder().decode(Packet.self, from: data),
+              packet.version == 2, packet.gift == nil, var profile = packet.profile,
+              profile.media?.id.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil || profile.media == nil else { return nil }
+        profile.member = true
+        profile.received = profile.received.map { self.mergeGifts($0, []) }
+        return profile
+    }
+
+    static func storeHostedMedia(_ data: Data, account: String, peer: String, media: PolusAvatarMedia) throws {
+        guard !data.isEmpty, data.count <= self.mediaLimit, self.mediaId(data, kind: media.kind) == media.id else {
+            throw ServiceError.invalidMedia
+        }
+        try self.writeMedia(data, account: account, peer: peer, media: media)
+    }
+
     private static func mediaId(_ data: Data, kind: PolusAvatarMedia.Kind) -> String {
         var hash = SHA256()
         hash.update(data: Data(kind.rawValue.utf8))

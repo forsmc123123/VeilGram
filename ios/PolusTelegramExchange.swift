@@ -82,7 +82,7 @@ enum PolusTelegramExchange {
     }
 
     @MainActor
-    static func load(context: AccountContext, peer: EnginePeer.Id) async -> PolusProfile {
+    static func load(context: AccountContext, peer: EnginePeer.Id, onMetadata: ((PolusProfile) -> Void)? = nil) async -> PolusProfile {
         if peer == context.account.peerId {
             let gifts = await self.receivedGifts(context: context)
             var own = PolusProfileService.localProfile(self.account(context))
@@ -91,7 +91,17 @@ enum PolusTelegramExchange {
             return own
         }
         guard peer.namespace == Namespaces.Peer.CloudUser else { return .empty }
-        if let hosted = await PolusHostedProfiles.load(account: self.account(context), peer: String(peer.id._internalGetInt64Value())) {
+        let account = self.account(context)
+        let peerKey = String(peer.id._internalGetInt64Value())
+        if var hosted = await PolusHostedProfiles.load(account: account, peer: peerKey) {
+            if let media = hosted.media, PolusHostedProfiles.needsMedia(account: account, peer: peerKey, media: media) {
+                var metadata = hosted
+                metadata.media = nil
+                onMetadata?(metadata)
+                if !(await PolusHostedProfiles.fetchMedia(account: account, peer: peerKey, media: media)) {
+                    hosted.media = nil
+                }
+            }
             return hosted
         }
         let matches = await self.search(context: context, location: .peer(peerId: peer, fromId: peer, tags: nil,

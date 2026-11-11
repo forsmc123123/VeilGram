@@ -70,7 +70,7 @@ final class PolusGiftShelf: UIView {
             tile.isAccessibilityElement = false
             button.addSubview(tile)
             let badge = UILabel()
-            badge.text = "Визуальный"
+            badge.text = item.hasPrefix("nft:") ? "NFT · Витрина" : "Визуальный"
             badge.font = .systemFont(ofSize: 10, weight: .semibold)
             badge.textColor = .white
             badge.backgroundColor = UIColor.black.withAlphaComponent(0.70)
@@ -85,7 +85,7 @@ final class PolusGiftShelf: UIView {
                 badge.widthAnchor.constraint(equalToConstant: 76),
                 badge.heightAnchor.constraint(equalToConstant: 16)
             ])
-            button.accessibilityLabel = "Визуальный подарок VeilGram"
+            button.accessibilityLabel = item.hasPrefix("nft:") ? "Коллекционный подарок в витрине VeilGram" : "Визуальный подарок VeilGram"
             button.addAction(UIAction { [weak self] _ in self?.onGift?(item) }, for: .touchUpInside)
             self.addSubview(button)
             return button

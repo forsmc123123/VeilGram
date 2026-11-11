@@ -7,7 +7,7 @@ import { createStore } from './store.mjs';
 
 test('profile sharing and deleted messages respect the verified account', async (t) => {
   const store = createStore(':memory:', Buffer.alloc(32, 7));
-  const server = profileServer(store, 'PolusExampleBot').listen(0, '127.0.0.1');
+  const server = profileServer(store).listen(0, '127.0.0.1');
   t.after(async () => {
     server.close();
     await once(server, 'close');
@@ -68,6 +68,18 @@ test('profile sharing and deleted messages respect the verified account', async 
   assert.equal((await appearance(firstAppearance, 'PUT', secondToken, packet)).status, 404);
   const saved = await appearance(firstAppearance, 'GET', secondToken);
   assert.deepEqual(Buffer.from(await saved.arrayBuffer()), packet);
+
+  const metadata = await appearance(`${firstAppearance}/metadata`, 'GET', secondToken);
+  assert.deepEqual(Buffer.from(await metadata.arrayBuffer()), header);
+  const conditional = await fetch(`${origin}${firstAppearance}/metadata`, {
+    headers: { Authorization: `Bearer ${secondToken}`, 'If-None-Match': metadata.headers.get('etag') }
+  });
+  assert.equal(conditional.status, 304);
+  assert.equal((await appearance(`${firstAppearance}/metadata`, 'GET')).status, 401);
+  const banner = await appearance(`${firstAppearance}/media/${id}`, 'GET', secondToken);
+  assert.deepEqual(Buffer.from(await banner.arrayBuffer()), media);
+  assert.equal(banner.headers.get('etag'), `"${id}"`);
+  assert.equal((await appearance(`${firstAppearance}/media/${'0'.repeat(64)}`, 'GET', secondToken)).status, 404);
 
   const record = { chatId: '808', messageId: '333', chat: 'Test chat', timestamp: 4, text: 'before editing' };
   store.stageMessage(first, '808', '333', record);

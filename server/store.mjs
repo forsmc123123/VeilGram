@@ -43,6 +43,8 @@ export function createStore(filename, archiveKey) {
   const putProfile = db.prepare('INSERT OR REPLACE INTO profiles VALUES (?, ?, ?)');
   const deleteProfile = db.prepare('DELETE FROM profiles WHERE peer = ?');
   const getAppearance = db.prepare('SELECT packet FROM appearances WHERE peer = ?');
+  const getAppearancePrefix = db.prepare('SELECT substr(packet, 1, 2052) AS prefix FROM appearances WHERE peer = ?');
+  const getAppearanceMedia = db.prepare('SELECT substr(packet, ?) AS media FROM appearances WHERE peer = ?');
   const putAppearance = db.prepare('INSERT OR REPLACE INTO appearances VALUES (?, ?)');
   const archiveAccounts = db.prepare('SELECT peer FROM archive_accounts');
   const enableArchive = db.prepare('INSERT OR IGNORE INTO archive_accounts VALUES (?)');
@@ -137,6 +139,12 @@ export function createStore(filename, archiveKey) {
     },
     appearance(peer) {
       return getAppearance.get(peer)?.packet;
+    },
+    appearancePrefix(peer) {
+      return getAppearancePrefix.get(peer)?.prefix;
+    },
+    appearanceMedia(peer, offset) {
+      return getAppearanceMedia.get(offset + 1, peer)?.media;
     },
     saveAppearance(peer, packet) {
       putAppearance.run(peer, packet);

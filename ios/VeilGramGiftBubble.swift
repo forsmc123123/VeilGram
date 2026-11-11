@@ -11,6 +11,13 @@ import TelegramCore
 public final class VeilGramGiftBubble: ChatMessageBubbleContentNode {
     private var card: VeilGramGiftCard?
 
+    override public func tapActionAtPoint(_ point: CGPoint, gesture: TapLongTapOrDoubleTapGesture, isEstimating: Bool) -> ChatMessageBubbleContentTapAction {
+        if gesture == .tap, let card = self.card, card.frame.contains(point), let link = card.collectibleLink {
+            return ChatMessageBubbleContentTapAction(content: .url(.init(url: link, concealed: false)))
+        }
+        return super.tapActionAtPoint(point, gesture: gesture, isEstimating: isEstimating)
+    }
+
     override public func asyncLayoutContent() -> (_ item: ChatMessageBubbleContentItem, _ layoutConstants: ChatMessageItemLayoutConstants, _ preparePosition: ChatMessageBubblePreparePosition, _ messageSelection: Bool?, _ constrainedSize: CGSize, _ avatarInset: CGFloat) -> (ChatMessageBubbleContentProperties, CGSize?, CGFloat, (CGSize, ChatMessageBubbleContentPosition) -> (CGFloat, (CGFloat) -> (CGSize, (ListViewItemUpdateAnimation, Bool, ListViewItemApply?) -> Void))) {
         return { [weak self] item, _, _, _, _, _ in
             let properties = ChatMessageBubbleContentProperties(hidesSimpleAuthorHeader: true, headerSpacing: 0,
@@ -50,6 +57,10 @@ private final class VeilGramGiftCard: UIView {
     private var sourceKey: String?
     private var context: AccountContext?
     private var resolved: StarGift?
+    var collectibleLink: String? {
+        guard case let .unique(gift)? = self.resolved else { return nil }
+        return "https://t.me/nft/" + gift.slug
+    }
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -60,21 +71,21 @@ private final class VeilGramGiftCard: UIView {
         self.layer.cornerCurve = .continuous
         self.layer.borderWidth = 1
         self.layer.borderColor = UIColor.white.withAlphaComponent(0.18).cgColor
-        self.gradient.colors = [UIColor(red: 0.26, green: 0.15, blue: 0.48, alpha: 1).cgColor,
-            UIColor(red: 0.12, green: 0.08, blue: 0.24, alpha: 1).cgColor]
+        self.gradient.colors = [UIColor.systemIndigo.withAlphaComponent(0.22).cgColor,
+            UIColor.secondarySystemBackground.cgColor]
         self.gradient.startPoint = CGPoint(x: 0, y: 0)
         self.gradient.endPoint = CGPoint(x: 1, y: 1)
         self.layer.addSublayer(self.gradient)
         self.fallback.text = "🎁"
         self.fallback.font = .systemFont(ofSize: 51)
         self.fallback.textAlignment = .center
-        self.title.textColor = .white
+        self.title.textColor = .label
         self.title.font = .systemFont(ofSize: 16, weight: .bold)
         self.title.textAlignment = .center
         self.title.numberOfLines = 2
         self.caption.text = "ВИЗУАЛЬНЫЙ ПОДАРОК"
         self.caption.font = .systemFont(ofSize: 9, weight: .semibold)
-        self.caption.textColor = UIColor(white: 1, alpha: 0.72)
+        self.caption.textColor = .secondaryLabel
         self.caption.textAlignment = .center
         self.addSubview(self.fallback)
         self.addSubview(self.title)
