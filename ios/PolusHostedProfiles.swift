@@ -87,7 +87,7 @@ enum PolusHostedProfiles {
     private static var profileDownloads: [ProfileRequest: Task<PolusProfile?, Never>] = [:]
     private static var registrationAttempts: [String: TimeInterval] = [:]
 
-    static func address(account: String) -> URL? { self.session(account: account)?.url }
+    nonisolated static func address(account: String) -> URL? { self.session(account: account)?.url }
 
     static func disconnect(account: String) {
         UserDefaults.standard.set(true, forKey: self.registrationPreference(account: account))
@@ -212,7 +212,7 @@ enum PolusHostedProfiles {
         return try JSONDecoder().decode(ArchiveConnection.self, from: data)
     }
 
-    private static func key(account: String) -> [String: Any] {
+    nonisolated private static func key(account: String) -> [String: Any] {
         [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: "VeilGramHostedProfiles",
@@ -220,7 +220,7 @@ enum PolusHostedProfiles {
         ]
     }
 
-    private static func session(account: String) -> Session? {
+    nonisolated private static func session(account: String) -> Session? {
         var query = self.key(account: account)
         query[kSecReturnData as String] = true
         var result: CFTypeRef?

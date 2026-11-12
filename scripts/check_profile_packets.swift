@@ -8,8 +8,11 @@ enum PolusBuildConfig {
 
 @main
 struct CheckProfilePackets {
-    static func main() throws {
+    nonisolated static func main() throws {
         let account = "120000000000001"
+        #if os(iOS)
+        _ = PolusHostedProfiles.address(account: account)
+        #endif
         let peer = "120000000000002"
         let style = PolusProfile(color: "C4A7FF", status: "Привет", received: ["nft:PlushPepe-42", "invalid"])
         let packet = try PolusProfileService.packet(profile: style, gift: nil, account: account)
