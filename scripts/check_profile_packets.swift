@@ -8,10 +8,10 @@ enum PolusBuildConfig {
 
 @main
 struct CheckProfilePackets {
-    nonisolated static func main() throws {
+    static func main() throws {
         let account = "120000000000001"
         #if os(iOS)
-        _ = PolusHostedProfiles.address(account: account)
+        self.checkHostedAddress(account: account)
         #endif
         let peer = "120000000000002"
         let style = PolusProfile(color: "C4A7FF", status: "Привет", received: ["nft:PlushPepe-42", "invalid"])
@@ -50,4 +50,10 @@ struct CheckProfilePackets {
             ["gift:123", "nft:PlushPepe-42"])
         print("VeilGram exchange packets passed")
     }
+
+    #if os(iOS)
+    nonisolated private static func checkHostedAddress(account: String) {
+        _ = PolusHostedProfiles.address(account: account)
+    }
+    #endif
 }
