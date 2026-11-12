@@ -1000,7 +1000,7 @@ index 463ab663..8137f363 100644
          if previousData?.members?.membersContext !== data.members?.membersContext {
              if let peer = data.peer, let _ = data.members {
                  self.groupMembersSearchContext = GroupMembersSearchContext(context: self.context, peerId: peer.id)
-@@ -4687,6 +4698,173 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -4687,6 +4698,169 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -1024,13 +1024,6 @@ index 463ab663..8137f363 100644
 +                    let archive = PolusDeletedArchiveScreen(context: self.context)
 +                    controller.present(UINavigationController(rootViewController: archive), animated: true, completion: nil)
 +                }
-+                if PolusHostedProfiles.address(account: account) != nil {
-+                    panel.hosting = { [weak self] in
-+                        guard let controller = self?.controller else { return }
-+                        let hosting = PolusHostingScreen(account: account)
-+                        controller.present(UINavigationController(rootViewController: hosting), animated: true, completion: nil)
-+                    }
-+                }
 +            }
 +            panel.action = { [weak self] in
 +                guard let self, let controller = self.controller else { return }
@@ -1040,6 +1033,9 @@ index 463ab663..8137f363 100644
 +                }
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
++        }
++        if !canEdit, let cached = PolusHostedProfiles.cachedProfile(account: account, peer: peer) {
++            self.polusProfile = cached
 +        }
 +        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
 +    }
@@ -1174,7 +1170,7 @@ index 463ab663..8137f363 100644
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5919,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5915,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -1192,7 +1188,7 @@ index 463ab663..8137f363 100644
                
              var isFirst = true
              for (sectionId, sectionItems) in items {
-@@ -6171,6 +6360,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -6171,6 +6356,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              let paneSideInsets = peerInfoSideInsets(layout: layout)
              self.paneContainerNode.stripInsets = (paneSideInsets.stripLeft, paneSideInsets.stripRight)
              self.paneContainerNode.update(size: self.paneContainerNode.bounds.size, sideInset: paneSideInsets.paneSideInset, topInset: paneContainerTopInset, bottomInset: bottomInset, deviceMetrics: layout.deviceMetrics, visibleHeight: visibleHeight, expansionFraction: self.initialExpandPanes ? 1.0 : effectiveAreaExpansionFraction, presentationData: self.presentationData, data: self.data, areTabsHidden: self.headerNode.customNavigationContentNode != nil, disableTabSwitching: disableTabSwitching, navigationHeight: navigationHeight, transition: transition)
@@ -1200,7 +1196,7 @@ index 463ab663..8137f363 100644
            
              // iPhone Duo unfolded portrait: the search field ends left of the status island.
              let navigationButtonsWidth = layout.size.width - layout.safeInsets.left - layout.safeInsets.right - layout.navigationBarTrailingButtonsInset
-@@ -7303,6 +7493,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
+@@ -7303,6 +7489,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
          }
          
          self.controllerNode.refreshHasPersonalChannelsIfNeeded()
@@ -1452,7 +1448,7 @@ index 17119cc3..12844c3a 100644
  import MinimizedContainer
  import BrowserUI
  import NewsFeedSupport
-@@ -323,6 +326,49 @@ final class AuthorizedApplicationContext {
+@@ -323,6 +326,74 @@ final class AuthorizedApplicationContext {
                  return
              }
  
@@ -1478,10 +1474,15 @@ index 17119cc3..12844c3a 100644
 +                    let content = UNMutableNotificationContent()
 +                    let settings = context.currentContentSettings.with { $0 }
 +                    let chat = message.peers[message.id.peerId].map { EnginePeer($0) }
-+                    let preview = self?.inAppNotificationSettings?.displayPreviews == true && !message.flags.contains(.CopyProtected) && !message.text.isEmpty && message.media.isEmpty && !message.attributes.contains(where: { $0 is TextEntitiesMessageAttribute })
++                    let preview = self?.inAppNotificationSettings?.displayPreviews == true && !message.flags.contains(.CopyProtected)
 +                        && message.restrictionReason(platform: "ios", contentSettings: settings) == nil && chat?.restrictionText(platform: "ios", contentSettings: settings) == nil
++                    let sender = message.author.map { EnginePeer($0) } ?? chat
 +                    content.title = preview ? (chat?.compactDisplayTitle ?? "VeilGram") : "VeilGram"
-+                    content.body = preview ? String(message.text.prefix(160)) : "Новое сообщение"
++                    let text = message.text.isEmpty ? "Вложение" : String(message.text.prefix(1024))
++                    if preview, let sender, sender.id != message.id.peerId {
++                        content.subtitle = sender.compactDisplayTitle
++                    }
++                    content.body = preview ? text : "Новое сообщение"
 +                    content.threadIdentifier = "\(accountId):\(peerId)"
 +                    content.categoryIdentifier = "c"
 +                    if playSound { content.sound = .default }
@@ -1493,7 +1494,27 @@ index 17119cc3..12844c3a 100644
 +                    ]
 +                    if let threadId = message.threadId { content.userInfo["threadId"] = threadId }
 +                    let identifier = "veilgram-local:\(accountId):\(peerId):\(message.id.id)"
-+                    center.add(UNNotificationRequest(identifier: identifier, content: content, trigger: nil))
++                    var deliveredContent: UNNotificationContent = content
++                    if preview, let sender {
++                        var avatar: INImage?
++                        if let resource = sender._asPeer().profileImageRepresentations.first?.resource,
++                           let path = context.account.postbox.mediaBox.completedResourcePath(resource),
++                           let data = try? Data(contentsOf: URL(fileURLWithPath: path)) {
++                            avatar = INImage(imageData: data)
++                        }
++                        let person = INPerson(personHandle: INPersonHandle(value: String(sender.id.toInt64()), type: .unknown),
++                            nameComponents: nil, displayName: sender.compactDisplayTitle, image: avatar,
++                            contactIdentifier: nil, customIdentifier: String(sender.id.toInt64()), isMe: false, suggestionType: .none)
++                        let intent = INSendMessageIntent(recipients: nil, outgoingMessageType: .outgoingMessageText,
++                            content: content.body, speakableGroupName: sender.id == message.id.peerId ? nil : INSpeakableString(spokenPhrase: content.title),
++                            conversationIdentifier: content.threadIdentifier, serviceName: nil, sender: person, attachments: nil)
++                        if let avatar { intent.setImage(avatar, forParameterNamed: \.sender) }
++                        let interaction = INInteraction(intent: intent, response: nil)
++                        interaction.direction = .incoming
++                        interaction.donate(completion: nil)
++                        deliveredContent = (try? content.updating(from: intent)) ?? content
++                    }
++                    center.add(UNNotificationRequest(identifier: identifier, content: deliveredContent, trigger: nil))
 +                    if notifiedPeers.count == 8 { break }
 +                }
 +                return
@@ -1502,7 +1523,7 @@ index 17119cc3..12844c3a 100644
              if let strongSelf = self, let (messages, _, notify, threadData) = messageList.last, let firstMessage = messages.first {
                  if UIApplication.shared.applicationState == .active {
                      let chatLocation: NavigateToChatControllerParams.Location
-@@ -835,6 +881,23 @@ final class AuthorizedApplicationContext {
+@@ -835,6 +906,23 @@ final class AuthorizedApplicationContext {
              self.rootController.updateRootControllers(showCallsTab: self.showCallsTab, showNewsTab: value)
          })
          
@@ -1526,7 +1547,7 @@ index 17119cc3..12844c3a 100644
          self.rootController.setForceInCallStatusBar((self.context.sharedContext as! SharedAccountContextImpl).currentCallStatusBarNode)
          if let groupCallController = self.context.sharedContext.currentGroupCallController as? VoiceChatController {
              if let overlayController = groupCallController.currentOverlayController {
-@@ -846,6 +909,7 @@ final class AuthorizedApplicationContext {
+@@ -846,6 +934,7 @@ final class AuthorizedApplicationContext {
      
      deinit {
          self.context.account.postbox.clearCaches()
@@ -1632,3 +1653,53 @@ index 6a071291..b26d941c 100644
      }
          
      public func openSettings(edit: Bool) {
+diff --git a/submodules/ChatListUI/Sources/Node/ChatListItem.swift b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+index 6ef509e..6a6cfd5 100644
+--- a/submodules/ChatListUI/Sources/Node/ChatListItem.swift
++++ b/submodules/ChatListUI/Sources/Node/ChatListItem.swift
+@@ -1463,6 +1463,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+         }
+     }
+     
++    private let veilGramStyleSubscription = MetaDisposable()
+     public private(set) var item: ChatListItem?
+     
+     private let backgroundNode: ASDisplayNode
+@@ -1958,6 +1959,7 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+     }
+ 
+     deinit {
++        self.veilGramStyleSubscription.dispose()
+         self.cachedDataDisposable.dispose()
+     }
+     
+@@ -1971,6 +1973,15 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+     func setupItem(item: ChatListItem, synchronousLoads: Bool) {
+         let previousItem = self.item
+         self.item = item
++        self.veilGramStyleSubscription.set(nil)
++        if case let .peer(data) = item.content, !data.displayAsMessage,
++           let peer = data.peer.chatOrMonoforumMainPeer, peer.id.namespace == Namespaces.Peer.CloudUser {
++            self.veilGramStyleSubscription.set(VeilGramPeerStyleCache.observe(context: item.context, peer: peer.id, updated: { [weak self] in
++                guard let self, let params = self.layoutParams else { return }
++                let (_, apply) = self.asyncLayout()(params.0, params.6, params.1, params.2, params.3, params.4, params.5)
++                apply(false, false)
++            }))
++        }
+         
+         var storyState: ChatListItemContent.StoryState?
+         if case let .peer(peerData) = item.content {
+@@ -3541,7 +3552,12 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+                         if case let .channel(channel) = itemPeer.peer, channel.flags.contains(.isMonoforum) {
+                             titleBadgeText = item.presentationData.strings.ChatList_MonoforumLabel
+                         }
+-                        titleAttributedString = NSAttributedString(string: displayTitle, font: titleFont, textColor: textColor)
++                        let style = itemPeer.chatOrMonoforumMainPeer.flatMap { peer -> VeilGramPeerStyle? in
++                            guard peer.id.namespace == Namespaces.Peer.CloudUser else { return nil }
++                            return VeilGramPeerStyleCache.get(account: String(account.peerId.id._internalGetInt64Value()), peer: String(peer.id.id._internalGetInt64Value()))
++                        }
++                        let customColor = style?.color.flatMap { UInt32($0, radix: 16) }.map { UIColor(rgb: $0) }
++                        titleAttributedString = NSAttributedString(string: displayTitle + (style?.member == true ? " 👻" : ""), font: titleFont, textColor: customColor ?? textColor)
+                     }
+                 case .group:
+                     titleAttributedString = NSAttributedString(string: item.presentationData.strings.ChatList_ArchivedChatsTitle, font: titleFont, textColor: theme.titleColor)

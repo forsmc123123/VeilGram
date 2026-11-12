@@ -86,6 +86,19 @@ enum PolusHostedProfiles {
     private static var publications: [String: Task<Void, Error>] = [:]
     private static var profileDownloads: [ProfileRequest: Task<PolusProfile?, Never>] = [:]
     private static var registrationAttempts: [String: TimeInterval] = [:]
+    private static var profileRefreshTimes: [String: TimeInterval] = [:]
+    static var styleUpdated: ((String, String, PolusProfile) -> Void)?
+    private static var mediaDownloads: [ProfileRequest: Task<Bool, Never>] = [:]
+
+    nonisolated static func cachedProfile(account: String, peer: String) -> PolusProfile? {
+        guard let bytes = UserDefaults.standard.data(forKey: "veilgram.hostedProfile.\(account).\(peer)") else { return nil }
+        return try? JSONDecoder().decode(PolusProfile.self, from: bytes)
+    }
+
+    private static func cache(_ profile: PolusProfile, account: String, peer: String) {
+        UserDefaults.standard.set(try? JSONEncoder().encode(profile), forKey: "veilgram.hostedProfile.\(account).\(peer)")
+        self.styleUpdated?(account, peer, profile)
+    }
 
     nonisolated static func address(account: String) -> URL? { self.session(account: account)?.url }
 
@@ -146,6 +159,9 @@ enum PolusHostedProfiles {
         guard let session = self.session(account: account) else { return }
         var profile = PolusProfileService.localProfile(account)
         profile.received = PolusProfileService.showcase(account)
+        var visibleProfile = profile
+        visibleProfile.member = true
+        self.cache(visibleProfile, account: account, peer: account)
         let packet = try PolusProfileService.packet(profile: profile, gift: nil, account: account)
         let previous = self.publications[account]
         let task = Task {
@@ -160,6 +176,11 @@ enum PolusHostedProfiles {
 
     static func load(account: String, peer: String) async -> PolusProfile? {
         guard let session = self.session(account: account) else { return nil }
+        let cacheKey = account + "." + peer
+        let cached = self.cachedProfile(account: account, peer: peer)
+        if let refreshed = self.profileRefreshTimes[cacheKey], ProcessInfo.processInfo.systemUptime - refreshed < 30 {
+            return cached
+        }
         let key = ProfileRequest(session: session, account: account, peer: peer)
         if let download = self.profileDownloads[key] {
             let result = await download.value
@@ -179,7 +200,11 @@ enum PolusHostedProfiles {
         self.profileDownloads[key] = download
         let result = await download.value
         self.profileDownloads[key] = nil
-        return self.session(account: account) == session ? result : nil
+        if self.session(account: account) == session {
+            self.profileRefreshTimes[cacheKey] = ProcessInfo.processInfo.systemUptime
+            if let result { self.cache(result, account: account, peer: peer) }
+        }
+        return self.session(account: account) == session ? (result ?? cached) : nil
     }
 
     static func needsMedia(account: String, peer: String, media: PolusAvatarMedia) -> Bool {
@@ -188,10 +213,24 @@ enum PolusHostedProfiles {
     }
 
     static func fetchMedia(account: String, peer: String, media: PolusAvatarMedia) async -> Bool {
-        guard let session = self.session(account: account),
-              let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)/media/\(media.id)", token: session.token),
-              self.session(account: account) == session else { return false }
-        return await Task.detached { (try? PolusProfileService.storeHostedMedia(data, account: account, peer: peer, media: media)) != nil }.value
+        if !self.needsMedia(account: account, peer: peer, media: media) { return true }
+        guard let session = self.session(account: account) else { return false }
+        let key = ProfileRequest(session: session, account: account, peer: peer + "/" + media.id)
+        if let download = self.mediaDownloads[key] { return await download.value }
+        let download = Task<Bool, Never> {
+            guard let data = try? await self.request(url: session.url, path: "v1/appearance/\(peer)/media/\(media.id)", token: session.token),
+                  self.session(account: account) == session else { return false }
+            return await Task.detached { (try? PolusProfileService.storeHostedMedia(data, account: account, peer: peer, media: media)) != nil }.value
+        }
+        self.mediaDownloads[key] = download
+        let result = await download.value
+        self.mediaDownloads[key] = nil
+        return result
+    }
+
+    static func prefetchMedia(account: String, peer: String, profile: PolusProfile) async {
+        guard self.mediaDownloads.count < 2, let media = profile.media else { return }
+        _ = await self.fetchMedia(account: account, peer: peer, media: media)
     }
 
     static func archive(account: String) async throws -> [ArchivedMessage] {

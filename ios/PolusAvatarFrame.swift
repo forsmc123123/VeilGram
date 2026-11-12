@@ -156,11 +156,13 @@ final class PolusProfileBanner: UIView {
         self.videoLayer.videoGravity = .resizeAspectFill
         self.layer.addSublayer(self.videoLayer)
         self.shade.colors = [UIColor.black.withAlphaComponent(0.5).cgColor, UIColor.clear.cgColor,
-            UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.72).cgColor]
+            UIColor.clear.cgColor, UIColor.black.withAlphaComponent(0.12).cgColor]
         self.shade.locations = [0, 0.27, 0.50, 1]
         self.layer.addSublayer(self.shade)
-        self.fade.colors = [UIColor.black.cgColor, UIColor.black.cgColor, UIColor.clear.cgColor]
-        self.fade.locations = [0, 0.74, 1]
+        self.fade.colors = [1.0, 1.0, 0.9, 0.65, 0.32, 0.08, 0.0].map {
+            UIColor.black.withAlphaComponent(CGFloat($0)).cgColor
+        }
+        self.fade.locations = [0, 0.45, 0.58, 0.70, 0.82, 0.92, 1]
         self.layer.mask = self.fade
         for event in [UIApplication.didEnterBackgroundNotification, UIApplication.didBecomeActiveNotification,
                       UIAccessibility.reduceMotionStatusDidChangeNotification] {
@@ -200,7 +202,11 @@ final class PolusProfileBanner: UIView {
             } onCancel: {
                 decode.cancel()
             }
-            guard !Task.isCancelled, let self, self.selection == selection, let result else { return }
+            guard !Task.isCancelled, let self, self.selection == selection else { return }
+            guard let result else {
+                self.selection = nil
+                return
+            }
             switch result {
             case let .image(image):
                 self.image.image = image.images?.first ?? image

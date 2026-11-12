@@ -91,6 +91,9 @@ enum PolusTelegramExchange {
         guard peer.namespace == Namespaces.Peer.CloudUser else { return .empty }
         let account = self.account(context)
         let peerKey = String(peer.id._internalGetInt64Value())
+        if let cached = PolusHostedProfiles.cachedProfile(account: account, peer: peerKey) {
+            onMetadata?(cached)
+        }
         if var hosted = await PolusHostedProfiles.load(account: account, peer: peerKey) {
             if let media = hosted.media, PolusHostedProfiles.needsMedia(account: account, peer: peerKey, media: media) {
                 var metadata = hosted
@@ -196,6 +199,22 @@ public enum VeilGramChatDecoration {
 
     @MainActor
     public static func installGiftActions() {
+        PolusHostedProfiles.styleUpdated = { account, peer, profile in
+            VeilGramPeerStyleCache.put(account: account, peer: peer, style: VeilGramPeerStyle(member: profile.member, color: profile.color))
+        }
+        VeilGramPeerStyleLoader.load = { context, peer in
+            guard peer.namespace == Namespaces.Peer.CloudUser else { return }
+            let account = String(context.account.peerId.id._internalGetInt64Value())
+            let peerKey = String(peer.id._internalGetInt64Value())
+            if peer == context.account.peerId {
+                let own = PolusProfileService.localProfile(account)
+                VeilGramPeerStyleCache.put(account: account, peer: peerKey, style: VeilGramPeerStyle(member: true, color: own.color))
+            } else {
+                if let profile = await PolusHostedProfiles.load(account: account, peer: peerKey) {
+                    await PolusHostedProfiles.prefetchMedia(account: account, peer: peerKey, profile: profile)
+                }
+            }
+        }
         VeilGramVisualGiftActions.current = VeilGramVisualGiftActions(
             balance: PolusTelegramExchange.balance,
             topUp: PolusTelegramExchange.topUp,
