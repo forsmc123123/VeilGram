@@ -1,8 +1,5 @@
-import { createHmac } from 'node:crypto';
-import { mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import tdl from 'tdl';
-import { getTdjson } from 'prebuilt-tdlib';
+import { telegramClient } from './telegram-client.mjs';
 
 const textContent = new Set([
   'messageText', 'messagePhoto', 'messageVideo', 'messageDocument', 'messageAnimation', 'messageAudio', 'messageVoiceNote'
@@ -21,13 +18,6 @@ function isOrdinaryChat(chat, peer) {
 }
 
 export function createCollector(store, dataDirectory) {
-  const apiId = Number(process.env.TELEGRAM_API_ID);
-  const apiHash = process.env.TELEGRAM_API_HASH;
-  const key = Buffer.from(process.env.ARCHIVE_KEY, 'hex');
-  if (!Number.isInteger(apiId) || apiId < 1 || apiId > 2147483647 || !/^[a-f0-9]{32}$/i.test(apiHash ?? '')) {
-    throw new Error('Set Telegram API credentials to enable server archives.');
-  }
-  tdl.configure({ tdjson: getTdjson(), verbosityLevel: 0 });
   const clients = new Map();
   const cleanup = setInterval(() => store.expireStaged(), 60 * 60 * 1000);
   cleanup.unref();
@@ -120,24 +110,9 @@ export function createCollector(store, dataDirectory) {
 
   function connect(peer) {
     if (clients.has(peer)) return true;
-    if (clients.size >= 15 || !/^[1-9][0-9]{0,15}$/.test(peer)) return false;
+    if (clients.size >= 15 || !/^[1-9][0-9]{0,15}$/.test(peer) || peer === process.env.VEILGRAM_REGISTRATION_PEER) return false;
     const directory = join(dataDirectory, 'telegram', peer);
-    mkdirSync(directory, { recursive: true, mode: 0o700 });
-    const client = tdl.createClient({
-      apiId,
-      apiHash,
-      databaseDirectory: directory,
-      filesDirectory: join(directory, 'files'),
-      databaseEncryptionKey: createHmac('sha256', key).update(`telegram:${peer}`).digest('hex'),
-      tdlibParameters: {
-        use_message_database: false,
-        use_chat_info_database: true,
-        use_secret_chats: false,
-        system_language_code: 'ru',
-        device_model: 'VeilGram Archive',
-        application_version: '1.0'
-      }
-    });
+    const client = telegramClient(directory, `telegram:${peer}`, 'VeilGram Archive', true);
     const entry = { client, state: 'pairing', queue: Promise.resolve(), active: false, authorized: false, stopping: false };
     clients.set(peer, entry);
     entry.timeout = setTimeout(() => void stop(peer, entry, entry.authorized), 5 * 60 * 1000);

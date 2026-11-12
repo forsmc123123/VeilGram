@@ -46,6 +46,11 @@ export function createStore(filename, archiveKey) {
   const getAppearancePrefix = db.prepare('SELECT substr(packet, 1, 2052) AS prefix FROM appearances WHERE peer = ?');
   const getAppearanceMedia = db.prepare('SELECT substr(packet, ?) AS media FROM appearances WHERE peer = ?');
   const putAppearance = db.prepare('INSERT OR REPLACE INTO appearances VALUES (?, ?)');
+  const addAppearance = db.prepare('INSERT OR IGNORE INTO appearances VALUES (?, ?)');
+  const registrationHeader = Buffer.from(JSON.stringify({ version: 2, profile: { member: true } }));
+  const registrationPacket = Buffer.alloc(4 + registrationHeader.length);
+  registrationPacket.writeUInt32BE(registrationHeader.length);
+  registrationHeader.copy(registrationPacket, 4);
   const archiveAccounts = db.prepare('SELECT peer FROM archive_accounts');
   const enableArchive = db.prepare('INSERT OR IGNORE INTO archive_accounts VALUES (?)');
   const disableArchive = db.prepare('DELETE FROM archive_accounts WHERE peer = ?');
@@ -71,6 +76,13 @@ export function createStore(filename, archiveKey) {
   const readDeleted = db.prepare('SELECT chat, message, payload FROM archive_messages WHERE peer = ? AND deleted IS NOT NULL ORDER BY deleted DESC, rowid DESC');
   const pruneCodes = db.prepare('DELETE FROM codes WHERE expires <= ?');
   const pruneSessions = db.prepare('DELETE FROM sessions WHERE expires <= ?');
+
+  function issueSession(peer, now) {
+    const token = randomBytes(32).toString('base64url');
+    pruneSessions.run(now);
+    addSession.run(digest(token), peer, now + sessionLifetime);
+    return token;
+  }
 
   function seal(peer, chat, message, value) {
     const key = createHmac('sha256', archiveKey).update(`archive:${peer}`).digest();
@@ -107,21 +119,31 @@ export function createStore(filename, archiveKey) {
         return;
       }
 
-      const token = randomBytes(32).toString('base64url');
       db.exec('BEGIN IMMEDIATE');
       try {
         if (deleteCode.run(peer, current.digest, now).changes === 0) {
           db.exec('ROLLBACK');
           return;
         }
-        pruneSessions.run(now);
-        addSession.run(digest(token), peer, now + sessionLifetime);
+        const token = issueSession(peer, now);
         db.exec('COMMIT');
+        return token;
       } catch (error) {
         db.exec('ROLLBACK');
         throw error;
       }
-      return token;
+    },
+    registerPeer(peer, now) {
+      db.exec('BEGIN IMMEDIATE');
+      try {
+        const token = issueSession(peer, now);
+        const created = addAppearance.run(peer, registrationPacket).changes > 0;
+        db.exec('COMMIT');
+        return { token, created };
+      } catch (error) {
+        db.exec('ROLLBACK');
+        throw error;
+      }
     },
     authenticatedPeer(token, now = Date.now()) {
       return getSession.get(digest(token), now)?.peer;

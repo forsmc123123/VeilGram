@@ -17,9 +17,20 @@ enum PolusHostedProfiles {
     }
 
     private struct ServerError: Decodable { let error: String }
-    private struct Access: Decodable { let token: String }
-    private struct Code: Encodable { let peer: String; let code: String }
     private struct Password: Encodable { let password: String }
+    private struct RegistrationPeer: Encodable { let peer: String }
+    private struct RegistrationPoll: Encodable { let poll: String }
+    private struct RegistrationChallenge: Decodable {
+        let username: String
+        let recipient: String
+        let proof: String
+        let poll: String
+    }
+    private struct RegistrationResult: Decodable {
+        let pending: Bool?
+        let token: String?
+        let created: Bool?
+    }
     struct ArchivedMessage: Decodable {
         let chat: String
         let timestamp: Int32
@@ -30,14 +41,13 @@ enum PolusHostedProfiles {
         let qr: String?
     }
     private enum Failure: LocalizedError {
-        case invalidAddress, invalidResponse, authentication, storage, missingEndpoint
+        case invalidAddress, invalidResponse, authentication, missingEndpoint
 
         var errorDescription: String? {
             switch self {
-            case .invalidAddress: return "Введи HTTPS-адрес сервера VeilGram."
+            case .invalidAddress: return "Сервер VeilGram отключён."
             case .invalidResponse, .missingEndpoint: return "Сервер VeilGram не принял запрос."
-            case .authentication: return "Код истёк или не подходит. Запроси новый код у администратора."
-            case .storage: return "Не удалось сохранить подключение в связке ключей iPhone."
+            case .authentication: return "Подключение к серверу VeilGram истекло."
             }
         }
     }
@@ -75,40 +85,61 @@ enum PolusHostedProfiles {
     private static let network = URLSession(configuration: .ephemeral, delegate: HostedTransport(), delegateQueue: nil)
     private static var publications: [String: Task<Void, Error>] = [:]
     private static var profileDownloads: [ProfileRequest: Task<PolusProfile?, Never>] = [:]
+    private static var registrationAttempts: [String: TimeInterval] = [:]
 
     static func address(account: String) -> URL? { self.session(account: account)?.url }
 
-    static func address(_ text: String) throws -> URL {
-        let value = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let parts = URLComponents(string: value), parts.scheme == "https",
-              let host = parts.host, !host.isEmpty, parts.user == nil, parts.password == nil,
-              parts.query == nil, parts.fragment == nil, parts.path.isEmpty || parts.path == "/",
-              let url = parts.url else { throw Failure.invalidAddress }
-        return url
-    }
-
-    static func connect(account: String, url: URL, code: String) async throws {
-        let encoded = try JSONEncoder().encode(Code(peer: account, code: code.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()))
-        let data = try await self.request(url: url, path: "v1/session", method: "POST", body: encoded, contentType: "application/json")
-        let access = try JSONDecoder().decode(Access.self, from: data)
-        guard access.token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil else {
-            throw Failure.invalidResponse
-        }
-        let credentials = try JSONEncoder().encode(Session(url: url, token: access.token))
-        let key = self.key(account: account)
-        let updated = SecItemUpdate(key as CFDictionary, [kSecValueData as String: credentials] as CFDictionary)
-        if updated == errSecItemNotFound {
-            var item = key
-            item[kSecValueData as String] = credentials
-            item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
-            guard SecItemAdd(item as CFDictionary, nil) == errSecSuccess else { throw Failure.storage }
-        } else if updated != errSecSuccess {
-            throw Failure.storage
-        }
-    }
-
     static func disconnect(account: String) {
+        UserDefaults.standard.set(true, forKey: self.registrationPreference(account: account))
         SecItemDelete(self.key(account: account) as CFDictionary)
+    }
+
+    private static func registrationPreference(account: String) -> String {
+        "veilgram.hostRegistrationDisabled.\(account)"
+    }
+
+    static func register(account: String, send: (String, String, String) async -> Bool) async {
+        let now = ProcessInfo.processInfo.systemUptime
+        guard let url = URL(string: PolusBuildConfig.hostedURL), url.scheme == "https",
+              self.session(account: account) == nil,
+              !UserDefaults.standard.bool(forKey: self.registrationPreference(account: account)),
+              self.registrationAttempts[account].map({ now - $0 >= 120 }) ?? true else { return }
+        self.registrationAttempts[account] = now
+        do {
+            let start = try await self.registrationRequest(url: url, route: "start", value: RegistrationPeer(peer: account))
+            let challenge = try JSONDecoder().decode(RegistrationChallenge.self, from: start)
+            guard challenge.recipient != account,
+                  challenge.recipient.range(of: "^[1-9][0-9]{0,15}$", options: .regularExpression) != nil,
+                  challenge.username.range(of: "^[A-Za-z0-9_]{5,32}$", options: .regularExpression) != nil,
+                  challenge.proof.range(of: "^[a-f0-9]{32}$", options: .regularExpression) != nil,
+                  challenge.poll.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+                  !Task.isCancelled,
+                  await send(challenge.username, challenge.recipient, "VEILGRAM-REGISTER " + challenge.proof) else { return }
+            for attempt in 0..<20 {
+                if attempt > 0 { try await Task.sleep(nanoseconds: 3_000_000_000) }
+                guard !Task.isCancelled else { return }
+                let response = try await self.registrationRequest(url: url, route: "complete", value: RegistrationPoll(poll: challenge.poll))
+                let result = try JSONDecoder().decode(RegistrationResult.self, from: response)
+                if result.pending == true { continue }
+                guard let token = result.token, token.range(of: "^[A-Za-z0-9_-]{43}$", options: .regularExpression) != nil,
+                      !Task.isCancelled, !UserDefaults.standard.bool(forKey: self.registrationPreference(account: account))
+                else { return }
+                var item = self.key(account: account)
+                item[kSecValueData as String] = try JSONEncoder().encode(Session(url: url, token: token))
+                item[kSecAttrAccessible as String] = kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly
+                if SecItemAdd(item as CFDictionary, nil) == errSecSuccess, result.created == true {
+                    try await self.publish(account: account)
+                }
+                return
+            }
+        } catch {
+            // Retry when VeilGram next enters the foreground.
+        }
+    }
+
+    private static func registrationRequest<T: Encodable>(url: URL, route: String, value: T) async throws -> Data {
+        try await self.request(url: url, path: "v1/registration/\(route)", method: "POST",
+                               body: JSONEncoder().encode(value), contentType: "application/json")
     }
 
     static func publish(account: String) async throws {
@@ -215,9 +246,6 @@ enum PolusHostedProfiles {
 
 final class PolusHostingScreen: UITableViewController {
     private let account: String
-    private let serverField = UITextField()
-    private let codeField = UITextField()
-    private var busy = false
 
     init(account: String) {
         self.account = account
@@ -230,86 +258,29 @@ final class PolusHostingScreen: UITableViewController {
         super.viewDidLoad()
         self.title = "Сервер VeilGram"
         self.navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .done, target: self, action: #selector(self.close))
-        self.serverField.placeholder = "https://адрес-сервера"
-        self.serverField.keyboardType = .URL
-        self.serverField.text = PolusHostedProfiles.address(account: self.account)?.absoluteString ?? PolusBuildConfig.hostedURL
-        self.codeField.placeholder = "Одноразовый код"
-        self.codeField.autocapitalizationType = .allCharacters
-        self.codeField.textContentType = .oneTimeCode
-        for field in [self.serverField, self.codeField] {
-            field.autocorrectionType = .no
-        }
     }
 
     @objc private func close() { self.dismiss(animated: true) }
 
     override func tableView(_ tableView: UITableView, numberOfRowsInSection section: Int) -> Int {
-        PolusHostedProfiles.address(account: self.account) == nil ? 3 : 2
+        PolusHostedProfiles.address(account: self.account) == nil ? 0 : 1
     }
 
     override func tableView(_ tableView: UITableView, titleForFooterInSection section: Int) -> String? {
-        if let url = PolusHostedProfiles.address(account: self.account) {
-            return "Подключён сервер \(url.host ?? url.absoluteString)."
-        }
-        return "Telegram ID: \(self.account). Попроси администратора сервера выдать одноразовый код для этого ID."
+        guard let url = PolusHostedProfiles.address(account: self.account) else { return "Сервер отключён." }
+        return "Оформление синхронизируется с сервером \(url.host ?? url.absoluteString)."
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
         let cell = UITableViewCell(style: .default, reuseIdentifier: nil)
-        if PolusHostedProfiles.address(account: self.account) != nil {
-            cell.textLabel?.text = indexPath.row == 0 ? "Опубликовать оформление" : "Отключить сервер"
-            cell.textLabel?.textColor = indexPath.row == 0 ? .systemBlue : .systemRed
-        } else if indexPath.row == 0 || indexPath.row == 1 {
-            let field = indexPath.row == 0 ? self.serverField : self.codeField
-            cell.contentView.addSubview(field)
-            field.translatesAutoresizingMaskIntoConstraints = false
-            let margins = cell.contentView.layoutMarginsGuide
-            NSLayoutConstraint.activate([
-                field.leadingAnchor.constraint(equalTo: margins.leadingAnchor),
-                field.trailingAnchor.constraint(equalTo: margins.trailingAnchor),
-                field.centerYAnchor.constraint(equalTo: margins.centerYAnchor)
-            ])
-            cell.selectionStyle = .none
-        } else {
-            cell.textLabel?.text = "Подключить"
-            cell.textLabel?.textColor = .systemBlue
-        }
+        cell.textLabel?.text = "Отключить сервер"
+        cell.textLabel?.textColor = .systemRed
         return cell
     }
 
     override func tableView(_ tableView: UITableView, didSelectRowAt indexPath: IndexPath) {
         tableView.deselectRow(at: indexPath, animated: true)
-        guard !self.busy else { return }
-        if PolusHostedProfiles.address(account: self.account) != nil, indexPath.row == 1 {
-            PolusHostedProfiles.disconnect(account: self.account)
-            tableView.reloadData()
-            return
-        }
-        guard PolusHostedProfiles.address(account: self.account) != nil || indexPath.row == 2 else { return }
-        self.busy = true
-        Task { @MainActor in
-            defer { self.busy = false }
-            do {
-                if PolusHostedProfiles.address(account: self.account) != nil {
-                    try await PolusHostedProfiles.publish(account: self.account)
-                    self.show("Оформление опубликовано.")
-                    return
-                }
-                let url = try PolusHostedProfiles.address(self.serverField.text ?? "")
-                try await PolusHostedProfiles.connect(account: self.account, url: url, code: self.codeField.text ?? "")
-                self.codeField.text = nil
-                self.tableView.reloadData()
-                try await PolusHostedProfiles.publish(account: self.account)
-                self.show("Сервер подключён, оформление опубликовано.")
-            } catch {
-                self.show(error.localizedDescription)
-            }
-        }
-    }
-
-    private func show(_ message: String) {
-        let alert = UIAlertController(title: "Сервер VeilGram", message: message, preferredStyle: .alert)
-        alert.addAction(UIAlertAction(title: "ОК", style: .default))
-        self.present(alert, animated: true)
+        PolusHostedProfiles.disconnect(account: self.account)
+        self.close()
     }
 }

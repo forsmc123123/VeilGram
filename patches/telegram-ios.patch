@@ -961,7 +961,7 @@ diff --git a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/Pe
 index 463ab663..8137f363 100644
 --- a/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
 +++ b/submodules/TelegramUI/Components/PeerInfo/PeerInfoScreen/Sources/PeerInfoScreen.swift
-@@ -265,6 +265,12 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -265,6 +265,11 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
      let edgeEffectView: EdgeEffectView
      
      let headerNode: PeerInfoHeaderNode
@@ -970,11 +970,10 @@ index 463ab663..8137f363 100644
 +    private var polusGiftShelf: PolusGiftShelf?
 +    private var polusPanelNode: ASDisplayNode?
 +    private var polusLoading = false
-+    private var polusSharing = false
      var underHeaderContentsAlpha: CGFloat = 1.0
      var regularSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
      var editingSections: [AnyHashable: PeerInfoScreenItemSectionContainerNode] = [:]
-@@ -1426,6 +1432,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -1426,6 +1431,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              guard let strongSelf = self else {
                  return
              }
@@ -982,7 +981,7 @@ index 463ab663..8137f363 100644
  
              if let (layout, navigationHeight) = strongSelf.validLayout {
                  if strongSelf.headerNode.isAvatarExpanded {
-@@ -1715,6 +1722,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -1715,6 +1721,8 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              }
          }
          
@@ -991,7 +990,7 @@ index 463ab663..8137f363 100644
          self.performNavigationButtonAction = { [weak self] key, source, gesture in
              guard let strongSelf = self else {
                  return
-@@ -2865,6 +2874,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -2865,6 +2873,9 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              }
          }
          self.data = data
@@ -1001,7 +1000,7 @@ index 463ab663..8137f363 100644
          if previousData?.members?.membersContext !== data.members?.membersContext {
              if let peer = data.peer, let _ = data.members {
                  self.groupMembersSearchContext = GroupMembersSearchContext(context: self.context, peerId: peer.id)
-@@ -4687,6 +4699,195 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -4687,6 +4698,173 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
          self.context.sharedContext.handleTextLinkAction(context: self.context, peerId: peer.id, navigateDisposable: self.resolveUrlDisposable, controller: controller, action: action, itemLink: item)
      }
      
@@ -1025,10 +1024,12 @@ index 463ab663..8137f363 100644
 +                    let archive = PolusDeletedArchiveScreen(context: self.context)
 +                    controller.present(UINavigationController(rootViewController: archive), animated: true, completion: nil)
 +                }
-+                panel.hosting = { [weak self] in
-+                    guard let controller = self?.controller else { return }
-+                    let hosting = PolusHostingScreen(account: account)
-+                    controller.present(UINavigationController(rootViewController: hosting), animated: true, completion: nil)
++                if PolusHostedProfiles.address(account: account) != nil {
++                    panel.hosting = { [weak self] in
++                        guard let controller = self?.controller else { return }
++                        let hosting = PolusHostingScreen(account: account)
++                        controller.present(UINavigationController(rootViewController: hosting), animated: true, completion: nil)
++                    }
 +                }
 +            }
 +            panel.action = { [weak self] in
@@ -1039,8 +1040,6 @@ index 463ab663..8137f363 100644
 +                }
 +                controller.present(UINavigationController(rootViewController: editor), animated: true, completion: nil)
 +            }
-+        } else {
-+            panel.share = { [weak self] in self?.sharePolusProfile() }
 +        }
 +        self.applyPolusProfile(self.polusProfile, account: account, peer: peer)
 +    }
@@ -1072,27 +1071,6 @@ index 463ab663..8137f363 100644
 +            return user.botInfo == nil && self.peerId != self.context.account.peerId
 +        }
 +        return false
-+    }
-+
-+    private func sharePolusProfile() {
-+        guard self.canExchangePolusProfile, !self.polusSharing, let controller = self.controller else { return }
-+        let alert = UIAlertController(title: "Отправить профиль VeilGram?", message: "Баннер, цвет имени, статус и витрина подарков будут отправлены файлом в личный чат.", preferredStyle: .alert)
-+        alert.addAction(UIAlertAction(title: "Отмена", style: .cancel))
-+        alert.addAction(UIAlertAction(title: "Отправить", style: .default) { [weak self] _ in
-+            guard let self, !self.polusSharing else { return }
-+            self.polusSharing = true
-+            Task { @MainActor [weak self] in
-+                guard let self else { return }
-+                defer { self.polusSharing = false }
-+                do {
-+                    try await PolusTelegramExchange.shareProfile(context: self.context, peer: self.peerId)
-+                    self.showPolusMessage("Профиль добавлен в очередь отправки Telegram.")
-+                } catch {
-+                    self.showPolusMessage(error.localizedDescription)
-+                }
-+            }
-+        })
-+        controller.present(alert, animated: true, completion: nil)
 +    }
 +
 +    private func showPolusMessage(_ text: String) {
@@ -1182,8 +1160,7 @@ index 463ab663..8137f363 100644
 +
 +    private func updatePolusPanel() {
 +        guard let panel = self.polusPanel else { return }
-+        panel.update(context: self.context, profile: self.polusProfile,
-+            canEdit: self.peerId == self.context.account.peerId, canGift: self.canExchangePolusProfile)
++        panel.update(profile: self.polusProfile, canEdit: self.peerId == self.context.account.peerId)
 +        self.updatePolusGiftShelf()
 +        self.requestLayout()
 +    }
@@ -1197,7 +1174,7 @@ index 463ab663..8137f363 100644
      private func requestLayout(animated: Bool = false) {
          self.headerNode.requestUpdateLayout?(animated)
      }
-@@ -5741,6 +5942,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -5741,6 +5919,17 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              if !((self.isSettings || self.isMyProfile) && self.state.isEditing) {
                  contentHeight += sectionSpacing + 12.0
              }
@@ -1215,7 +1192,7 @@ index 463ab663..8137f363 100644
                
              var isFirst = true
              for (sectionId, sectionItems) in items {
-@@ -6171,6 +6383,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
+@@ -6171,6 +6360,7 @@ final class PeerInfoScreenNode: ViewControllerTracingNode, PeerInfoScreenNodePro
              let paneSideInsets = peerInfoSideInsets(layout: layout)
              self.paneContainerNode.stripInsets = (paneSideInsets.stripLeft, paneSideInsets.stripRight)
              self.paneContainerNode.update(size: self.paneContainerNode.bounds.size, sideInset: paneSideInsets.paneSideInset, topInset: paneContainerTopInset, bottomInset: bottomInset, deviceMetrics: layout.deviceMetrics, visibleHeight: visibleHeight, expansionFraction: self.initialExpandPanes ? 1.0 : effectiveAreaExpansionFraction, presentationData: self.presentationData, data: self.data, areTabsHidden: self.headerNode.customNavigationContentNode != nil, disableTabSwitching: disableTabSwitching, navigationHeight: navigationHeight, transition: transition)
@@ -1223,7 +1200,7 @@ index 463ab663..8137f363 100644
            
              // iPhone Duo unfolded portrait: the search field ends left of the status island.
              let navigationButtonsWidth = layout.size.width - layout.safeInsets.left - layout.safeInsets.right - layout.navigationBarTrailingButtonsInset
-@@ -7303,6 +7516,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
+@@ -7303,6 +7493,7 @@ public final class PeerInfoScreenImpl: ViewController, PeerInfoScreen, KeyShortc
          }
          
          self.controllerNode.refreshHasPersonalChannelsIfNeeded()
@@ -1466,7 +1443,16 @@ index 17119cc3..12844c3a 100644
  import Intents
  import TelegramPresentationData
  import TelegramUIPreferences
-@@ -323,6 +324,49 @@ final class AuthorizedApplicationContext {
+@@ -30,6 +31,8 @@ import StoryContainerScreen
+ import ChatMessageNotificationItem
+ import PhoneNumberFormat
+ import AttachmentUI
++import PeerInfoScreen
++import UndoUI
+ import MinimizedContainer
+ import BrowserUI
+ import NewsFeedSupport
+@@ -323,6 +326,49 @@ final class AuthorizedApplicationContext {
                  return
              }
  
@@ -1516,6 +1502,38 @@ index 17119cc3..12844c3a 100644
              if let strongSelf = self, let (messages, _, notify, threadData) = messageList.last, let firstMessage = messages.first {
                  if UIApplication.shared.applicationState == .active {
                      let chatLocation: NavigateToChatControllerParams.Location
+@@ -835,6 +881,23 @@ final class AuthorizedApplicationContext {
+             self.rootController.updateRootControllers(showCallsTab: self.showCallsTab, showNewsTab: value)
+         })
+         
++        self.applicationInForegroundDisposable = (context.sharedContext.applicationBindings.applicationInForeground
++        |> distinctUntilChanged
++        |> deliverOnMainQueue).start(next: { [weak self] foreground in
++            guard foreground else { return }
++            Task { @MainActor [weak self] in
++                guard let context = self?.context else { return }
++                await VeilGramChatDecoration.registerHosting(context: context) { [weak self] in
++                    guard self != nil, UIApplication.shared.applicationState == .active else { return false }
++                    let presentationData = context.sharedContext.currentPresentationData.with { $0 }
++                    context.sharedContext.presentGlobalController(UndoOverlayController(presentationData: presentationData,
++                        content: .info(title: "VeilGram", text: "Отправляем служебный код для подключения профиля.",
++                                       timeout: 4, customUndoText: nil), action: { _ in false }), nil)
++                    return true
++                }
++            }
++        })
++
+         self.rootController.setForceInCallStatusBar((self.context.sharedContext as! SharedAccountContextImpl).currentCallStatusBarNode)
+         if let groupCallController = self.context.sharedContext.currentGroupCallController as? VoiceChatController {
+             if let overlayController = groupCallController.currentOverlayController {
+@@ -846,6 +909,7 @@ final class AuthorizedApplicationContext {
+     
+     deinit {
+         self.context.account.postbox.clearCaches()
++        self.applicationInForegroundDisposable?.dispose()
+         self.showNewsTabDisposable?.dispose()
+         self.context.account.shouldKeepOnlinePresence.set(.single(false))
+         self.context.account.shouldBeServiceTaskMaster.set(.single(.never))
 diff --git a/submodules/TelegramUI/Sources/ChatController.swift b/submodules/TelegramUI/Sources/ChatController.swift
 index f32b3c16..4cc5ad01 100644
 --- a/submodules/TelegramUI/Sources/ChatController.swift

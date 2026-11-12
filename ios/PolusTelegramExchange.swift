@@ -16,6 +16,28 @@ enum PolusTelegramExchange {
         "polus.visualStars.\(self.account(context))"
     }
 
+    @MainActor
+    static func register(context: AccountContext, notice: () -> Bool) async {
+        await PolusHostedProfiles.register(account: self.account(context)) { username, recipient, text in
+            let resolved = context.engine.peers.resolvePeerByName(name: username, referrer: nil, ageLimit: 0)
+            |> filter { value in
+                if case .result = value { return true }
+                return false
+            }
+            guard case let .result(.user(user)?)? = await self.first(resolved),
+                  user.botInfo == nil, user.id.namespace == Namespaces.Peer.CloudUser,
+                  String(user.id.id._internalGetInt64Value()) == recipient,
+                  !Task.isCancelled, notice() else { return false }
+            let sent: Signal<Float, NoError> = standaloneSendMessage(account: context.account, peerId: user.id, text: text,
+                attributes: [OutgoingContentInfoMessageAttribute(flags: .disableLinkPreviews)],
+                media: nil, replyToMessageId: nil)
+            |> filter { _ in false }
+            |> then(.single(1))
+            |> `catch` { _ in .single(0) }
+            return await self.first(sent) == 1
+        }
+    }
+
     static func balance(_ context: AccountContext) -> Int {
         let spent = UserDefaults.standard.integer(forKey: self.walletKey(context))
         return max(0, self.allowance - spent)
@@ -24,15 +46,6 @@ enum PolusTelegramExchange {
     @MainActor
     static func topUp(_ context: AccountContext) {
         UserDefaults.standard.removeObject(forKey: self.walletKey(context))
-    }
-
-    @MainActor
-    static func shareProfile(context: AccountContext, peer: EnginePeer.Id) async throws {
-        var profile = PolusProfileService.localProfile(self.account(context))
-        let received = await self.receivedGifts(context: context)
-        profile.received = PolusProfileService.mergeGifts(PolusProfileService.showcase(self.account(context)), received)
-        let data = try PolusProfileService.packet(profile: profile, gift: nil, account: self.account(context))
-        try await self.enqueue(context: context, peer: peer, name: self.profileFile, caption: "👻 Мой профиль VeilGram", data: data)
     }
 
     @MainActor
@@ -56,21 +69,6 @@ enum PolusTelegramExchange {
             UserDefaults.standard.set(max(0, UserDefaults.standard.integer(forKey: key) - cost), forKey: key)
             throw error
         }
-    }
-
-    private static func enqueue(context: AccountContext, peer: EnginePeer.Id, name: String, caption: String, data: Data) async throws {
-        let id = Int64.random(in: Int64.min...Int64.max)
-        let size = Int64(data.count)
-        let resource = LocalFileMediaResource(fileId: id, size: size)
-        context.engine.resources.storeResourceData(id: EngineMediaResource.Id(resource.id), data: data, synchronous: true)
-        let file = TelegramMediaFile(fileId: EngineMedia.Id(namespace: Namespaces.Media.LocalFile, id: id),
-            partialReference: nil, resource: resource, previewRepresentations: [], videoThumbnails: [],
-            immediateThumbnailData: nil, mimeType: self.mimeType, size: size,
-            attributes: [.FileName(fileName: name)], alternativeRepresentations: [])
-        let message = EnqueueMessage.message(text: caption, attributes: [], inlineStickers: [:],
-            mediaReference: .standalone(media: file), threadId: nil, replyToMessageId: nil, replyToStoryId: nil,
-            localGroupingKey: nil, correlationId: nil, bubbleUpEmojiOrStickersets: [])
-        try await self.enqueueMessage(context: context, peer: peer, message: message)
     }
 
     private static func enqueueMessage(context: AccountContext, peer: EnginePeer.Id, message: EnqueueMessage) async throws {
@@ -191,6 +189,11 @@ enum PolusTelegramExchange {
 }
 
 public enum VeilGramChatDecoration {
+    @MainActor
+    public static func registerHosting(context: AccountContext, notice: () -> Bool) async {
+        await PolusTelegramExchange.register(context: context, notice: notice)
+    }
+
     @MainActor
     public static func installGiftActions() {
         VeilGramVisualGiftActions.current = VeilGramVisualGiftActions(

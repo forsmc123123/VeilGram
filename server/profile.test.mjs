@@ -3,7 +3,61 @@ import { createHash } from 'node:crypto';
 import { once } from 'node:events';
 import { test } from 'node:test';
 import { profileServer } from './index.mjs';
+import { createRegistration } from './registration.mjs';
 import { createStore } from './store.mjs';
+
+test('automatic registration requires an incoming proof from the claimed Telegram user', async (t) => {
+  const store = createStore(':memory:');
+  let now = Date.now();
+  const peer = '987654321012';
+  const recipient = '987654321014';
+  const registration = createRegistration(store, recipient, () => now);
+  const server = profileServer(store, undefined, { registration }).listen(0, '127.0.0.1');
+  t.after(async () => {
+    server.close();
+    await once(server, 'close');
+    store.close();
+  });
+  await once(server, 'listening');
+  const post = (route, body) => fetch(`http://127.0.0.1:${server.address().port}/v1/registration/${route}`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const verify = (proof, sender = peer, options = {}) => registration.verify({
+    chat_id: sender,
+    sender_id: { _: 'messageSenderUser', user_id: sender },
+    content: { _: 'messageText', text: { text: `VEILGRAM-REGISTER ${proof}` } },
+    ...options
+  });
+  assert.equal((await post('start', { peer })).status, 503);
+  registration.setReady('VeilGramTest');
+  const { username, recipient: destination, proof, poll } = await (await post('start', { peer })).json();
+  assert.equal(username, 'VeilGramTest');
+  assert.equal(destination, recipient);
+  verify(proof, '987654321013');
+  verify(proof, peer, { forward_info: {} });
+  verify(proof, peer, { chat_id: '-1001234' });
+  verify(proof, peer, { is_outgoing: true });
+  assert.equal((await post('complete', { poll: proof })).status, 401);
+  assert.deepEqual(await (await post('complete', { poll })).json(), { pending: true });
+  verify(proof);
+  const { token, created } = await (await post('complete', { poll })).json();
+  assert.equal(store.authenticatedPeer(token, now), peer);
+  assert.equal(created, true);
+  assert.equal(JSON.parse(Buffer.from(store.appearance(peer)).subarray(4)).profile.member, true);
+  assert.equal((await post('complete', { poll })).status, 401);
+
+  const original = Buffer.from('existing profile');
+  store.saveAppearance(peer, original);
+  const second = await (await post('start', { peer })).json();
+  verify(second.proof);
+  assert.equal((await (await post('complete', { poll: second.poll })).json()).created, false);
+  assert.deepEqual(Buffer.from(store.appearance(peer)), original);
+
+  const expired = await (await post('start', { peer })).json();
+  now += 120_000;
+  verify(expired.proof);
+  assert.equal((await post('complete', { poll: expired.poll })).status, 401);
+});
 
 test('profile sharing and deleted messages respect the verified account', async (t) => {
   const store = createStore(':memory:', Buffer.alloc(32, 7));

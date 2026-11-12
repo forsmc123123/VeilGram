@@ -7,6 +7,7 @@ import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createStore } from './store.mjs';
+import { createRegistration } from './registration.mjs';
 
 const catalog = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
 const bannerIds = new Set(catalog.banners.map(({ id }) => id));
@@ -75,13 +76,29 @@ function validAppearance(packet) {
   return createHash('sha256').update(kind).update(bytes).digest('hex') === id;
 }
 
-export function profileServer(store, botUsername, { tls, collector } = {}) {
+export function profileServer(store, botUsername, { tls, collector, registration } = {}) {
   const options = { requestTimeout: 15_000, headersTimeout: 5_000 };
   const handle = async (request, response) => {
     const { method, url } = request;
     try {
       if (method === 'GET' && url === '/health') {
-        return reply(response, 200, { service: 'veilgram', bot: Boolean(botUsername), profileMetadata: true });
+        return reply(response, 200, {
+          service: 'veilgram', bot: Boolean(botUsername), profileMetadata: true,
+          registration: Boolean(registration?.ready())
+        });
+      }
+      if (method === 'POST' && url === '/v1/registration/start') {
+        if (!registration?.ready()) return reply(response, 503, { error: 'registration_unavailable' });
+        const { peer } = await readBody(request) ?? {};
+        if (!validPeer(peer)) return reply(response, 400, { error: 'invalid_peer' });
+        const challenge = registration.start(peer, request.socket.remoteAddress);
+        return challenge ? reply(response, 200, challenge) : reply(response, 429, { error: 'registration_busy' });
+      }
+      if (method === 'POST' && url === '/v1/registration/complete') {
+        if (!registration) return reply(response, 503, { error: 'registration_unavailable' });
+        const { poll } = await readBody(request) ?? {};
+        const result = registration.complete(poll);
+        return result ? reply(response, 200, result) : reply(response, 401, { error: 'invalid_or_expired_registration' });
       }
       if (method === 'GET' && url === '/v1/catalog') {
         if (!botUsername) return reply(response, 503, { error: 'bot_unavailable' });
@@ -245,12 +262,31 @@ async function main() {
     : undefined;
   const archiveConfigured = archiveKey && process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH;
   const collector = archiveConfigured ? await import('./collector.mjs').then(({ createCollector }) => createCollector(store, dirname(database))) : undefined;
-  profileServer(store, bot?.username, { tls, collector }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
+  const registrationPeer = process.env.VEILGRAM_REGISTRATION_PEER;
+  let registration;
+  let verifier;
+  if (registrationPeer) {
+    if (!archiveConfigured || !validPeer(registrationPeer)) throw new Error('Invalid registration account configuration.');
+    registration = createRegistration(store, registrationPeer);
+    const { createVerifier } = await import('./verifier.mjs');
+    verifier = createVerifier(registration, registrationPeer, dirname(database));
+  }
+  profileServer(store, bot?.username, { tls, collector, registration }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
     console.log(`Profile service listening on port ${port}.`);
   });
   const consoleInput = createInterface({ input: process.stdin, terminal: false });
   consoleInput.on('line', (line) => {
-    const match = /^invite\s+([1-9][0-9]{0,15})$/.exec(line.trim());
+    const input = line.trim();
+    if (input === 'registration status') {
+      console.log(verifier?.status() ?? 'VeilGram automatic registration is disabled.');
+      return;
+    }
+    if (input === 'registration login') {
+      if (verifier) void verifier.login().catch(() => console.error('Could not start registration account pairing.'));
+      else console.log('VeilGram automatic registration is disabled.');
+      return;
+    }
+    const match = /^invite\s+([1-9][0-9]{0,15})$/.exec(input);
     if (!match) return;
     try {
       const code = store.issueCode(match[1]);

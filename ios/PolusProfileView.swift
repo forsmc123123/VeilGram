@@ -7,7 +7,6 @@ final class PolusProfilePanel: UIView {
     private let stack = UIStackView()
     private(set) var preferredHeight: CGFloat = 0
     var action: (() -> Void)?
-    var share: (() -> Void)?
     var archive: (() -> Void)?
     var hosting: (() -> Void)?
 
@@ -25,7 +24,7 @@ final class PolusProfilePanel: UIView {
         self.stack.frame = self.bounds
     }
 
-    func update(context: AccountContext, profile: PolusProfile, canEdit: Bool, canGift: Bool) {
+    func update(profile: PolusProfile, canEdit: Bool) {
         for item in self.stack.arrangedSubviews {
             self.stack.removeArrangedSubview(item)
             item.removeFromSuperview()
@@ -66,15 +65,6 @@ final class PolusProfilePanel: UIView {
             button.addTarget(self, action: #selector(self.openHosting), for: .touchUpInside)
             self.append(button, height: 44)
         }
-        if canGift {
-            var config = UIButton.Configuration.gray()
-            config.title = "Отправить свой профиль VeilGram"
-            config.image = UIImage(systemName: "paperplane")
-            config.imagePadding = 8
-            let button = UIButton(configuration: config)
-            button.addTarget(self, action: #selector(self.shareProfile), for: .touchUpInside)
-            self.append(button, height: 44)
-        }
     }
 
     private func append(_ view: UIView, height: CGFloat) {
@@ -85,7 +75,6 @@ final class PolusProfilePanel: UIView {
     }
 
     @objc private func performAction() { self.action?() }
-    @objc private func shareProfile() { self.share?() }
     @objc private func openArchive() { self.archive?() }
     @objc private func openHosting() { self.hosting?() }
 }
