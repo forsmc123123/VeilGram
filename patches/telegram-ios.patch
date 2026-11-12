@@ -641,7 +641,7 @@ index 3bba777e..abd7c8d3 100644
 +               !peerView.isSavedMessages, customTitle == nil, !isScheduled {
 +                veilGramTitle = component.veilGramMember
 +                if veilGramTitle {
-+                    titleSegments.append(AnimatedTextComponent.Item(id: "veilgram", isUnbreakable: true, content: .text(" 👻")))
++                    titleSegments.append(AnimatedTextComponent.Item(id: "veilgram", isUnbreakable: true, content: .icon("VeilGramGhost", tint: false, offset: .zero)))
 +                }
 +            }
              var accessibilityText = ""
@@ -940,7 +940,7 @@ index 7751e79e..312dc294 100644
 +        if self.polusBadges.isEmpty && profile.member == true {
 +            for key in [TitleNodeStateRegular, TitleNodeStateExpanded] {
 +                let badge = UILabel()
-+                badge.text = "👻"
++                badge.attributedText = VeilGramBrand.badge(font: .systemFont(ofSize: 14))
 +                badge.font = .systemFont(ofSize: 12)
 +                badge.textAlignment = .center
 +                badge.backgroundColor = UIColor(red: 0.28, green: 0.17, blue: 0.50, alpha: 1)
@@ -1474,7 +1474,7 @@ index 17119cc3..12844c3a 100644
 +                    let content = UNMutableNotificationContent()
 +                    let settings = context.currentContentSettings.with { $0 }
 +                    let chat = message.peers[message.id.peerId].map { EnginePeer($0) }
-+                    let preview = self?.inAppNotificationSettings?.displayPreviews == true && !message.flags.contains(.CopyProtected)
++                    let preview = (self?.inAppNotificationSettings ?? InAppNotificationSettings.defaultSettings).displayPreviews && !message.flags.contains(.CopyProtected)
 +                        && message.restrictionReason(platform: "ios", contentSettings: settings) == nil && chat?.restrictionText(platform: "ios", contentSettings: settings) == nil
 +                    let sender = message.author.map { EnginePeer($0) } ?? chat
 +                    content.title = preview ? (chat?.compactDisplayTitle ?? "VeilGram") : "VeilGram"
@@ -1689,7 +1689,7 @@ index 6ef509e..6a6cfd5 100644
          
          var storyState: ChatListItemContent.StoryState?
          if case let .peer(peerData) = item.content {
-@@ -3541,7 +3552,12 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
+@@ -3541,7 +3552,17 @@ public class ChatListItemNode: ItemListRevealOptionsItemNode {
                          if case let .channel(channel) = itemPeer.peer, channel.flags.contains(.isMonoforum) {
                              titleBadgeText = item.presentationData.strings.ChatList_MonoforumLabel
                          }
@@ -1699,7 +1699,12 @@ index 6ef509e..6a6cfd5 100644
 +                            return VeilGramPeerStyleCache.get(account: String(account.peerId.id._internalGetInt64Value()), peer: String(peer.id.id._internalGetInt64Value()))
 +                        }
 +                        let customColor = style?.color.flatMap { UInt32($0, radix: 16) }.map { UIColor(rgb: $0) }
-+                        titleAttributedString = NSAttributedString(string: displayTitle + (style?.member == true ? " 👻" : ""), font: titleFont, textColor: customColor ?? textColor)
++                        let styledTitle = NSMutableAttributedString(string: displayTitle, font: titleFont, textColor: customColor ?? textColor)
++                        if style?.member == true {
++                            styledTitle.append(NSAttributedString(string: " ", font: titleFont, textColor: customColor ?? textColor))
++                            styledTitle.append(VeilGramBrand.badge(font: titleFont))
++                        }
++                        titleAttributedString = styledTitle
                      }
                  case .group:
                      titleAttributedString = NSAttributedString(string: item.presentationData.strings.ChatList_ArchivedChatsTitle, font: titleFont, textColor: theme.titleColor)

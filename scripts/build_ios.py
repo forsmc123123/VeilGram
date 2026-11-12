@@ -70,6 +70,13 @@ def prepare(source):
         'images': [{'idiom': 'universal', 'filename': 'VeilGram.png'}],
         'info': {'version': 1, 'author': 'xcode'},
     }), encoding='utf-8')
+    ghost_asset = source / 'submodules/TelegramUI/Images.xcassets/VeilGramGhost.imageset'
+    ghost_asset.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(ROOT / 'ios/branding/veilgram-ghost@3x.png', ghost_asset / 'ghost@3x.png')
+    (ghost_asset / 'Contents.json').write_text(json.dumps({
+        'images': [{'idiom': 'universal', 'scale': '3x', 'filename': 'ghost@3x.png'}],
+        'info': {'version': 1, 'author': 'xcode'},
+    }), encoding='utf-8')
     hosted_url = os.environ.get('VEILGRAM_HOSTED_URL', '').strip()
     hosted_certificate_hash = os.environ.get('VEILGRAM_CERTIFICATE_SHA256', '').strip().lower()
     if hosted_url and not re.fullmatch(r'https://[A-Za-z0-9.-]+(?::[0-9]{1,5})?', hosted_url):

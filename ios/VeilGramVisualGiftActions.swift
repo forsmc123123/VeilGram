@@ -1,3 +1,5 @@
+import UIKit
+import Display
 import Foundation
 import SwiftSignalKit
 import TelegramCore
@@ -67,5 +69,15 @@ public struct VeilGramVisualGiftActions {
         self.topUp = topUp
         self.cost = cost
         self.send = send
+    }
+}
+
+public enum VeilGramBrand {
+    public static func badge(font: UIFont) -> NSAttributedString {
+        let attachment = NSTextAttachment()
+        attachment.image = UIImage(bundleImageName: "VeilGramGhost")?.withRenderingMode(.alwaysOriginal)
+        let side = font.pointSize
+        attachment.bounds = CGRect(x: 0, y: (font.capHeight - side) / 2, width: side, height: side)
+        return NSAttributedString(attachment: attachment)
     }
 }
