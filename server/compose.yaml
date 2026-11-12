@@ -5,6 +5,7 @@ services:
     command: ["node", "/app/index.mjs"]
     environment:
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_BOT_ENABLED: ${TELEGRAM_BOT_ENABLED:-0}
       PROFILE_DATABASE: /data/profiles.sqlite
       HOST: 0.0.0.0
     volumes:

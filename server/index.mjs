@@ -4,6 +4,7 @@ import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
 import { dirname, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createStore } from './store.mjs';
 
@@ -80,7 +81,7 @@ export function profileServer(store, botUsername, { tls, collector } = {}) {
     const { method, url } = request;
     try {
       if (method === 'GET' && url === '/health') {
-        return reply(response, 200, { service: 'veilgram', bot: Boolean(botUsername) });
+        return reply(response, 200, { service: 'veilgram', bot: Boolean(botUsername), profileMetadata: true });
       }
       if (method === 'GET' && url === '/v1/catalog') {
         if (!botUsername) return reply(response, 503, { error: 'bot_unavailable' });
@@ -234,7 +235,7 @@ async function main() {
     }
     return;
   }
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const token = process.env.TELEGRAM_BOT_ENABLED === '1' ? process.env.TELEGRAM_BOT_TOKEN : undefined;
   if (token && !/^\d+:[\w-]+$/.test(token)) throw new Error('Invalid bot token.');
   const bot = token ? await telegram(token, 'getMe') : undefined;
   if (token && !bot?.username) throw new Error('Bot username is unavailable.');
@@ -246,6 +247,17 @@ async function main() {
   const collector = archiveConfigured ? await import('./collector.mjs').then(({ createCollector }) => createCollector(store, dirname(database))) : undefined;
   profileServer(store, bot?.username, { tls, collector }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
     console.log(`Profile service listening on port ${port}.`);
+  });
+  const consoleInput = createInterface({ input: process.stdin, terminal: false });
+  consoleInput.on('line', (line) => {
+    const match = /^invite\s+([1-9][0-9]{0,15})$/.exec(line.trim());
+    if (!match) return;
+    try {
+      const code = store.issueCode(match[1]);
+      console.log(code ? `Invite for ${match[1]}: ${code} (5 min)` : 'Wait 30 seconds before replacing a recent code.');
+    } catch {
+      console.error('Could not issue an invite.');
+    }
   });
   if (token) await pollBot(token, store);
 }
