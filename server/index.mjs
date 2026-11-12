@@ -263,13 +263,23 @@ async function main() {
   const archiveConfigured = archiveKey && process.env.TELEGRAM_API_ID && process.env.TELEGRAM_API_HASH;
   const collector = archiveConfigured ? await import('./collector.mjs').then(({ createCollector }) => createCollector(store, dirname(database))) : undefined;
   const registrationPeer = process.env.VEILGRAM_REGISTRATION_PEER;
+  const registrationNameFile = 'registration-username';
+  const registrationUsername = (process.env.VEILGRAM_REGISTRATION_USERNAME ??
+    (existsSync(registrationNameFile) ? readFileSync(registrationNameFile, 'utf8') : '')).trim().replace(/^@/, '').toLowerCase();
   let registration;
   let verifier;
-  if (registrationPeer) {
-    if (!archiveConfigured || !validPeer(registrationPeer)) throw new Error('Invalid registration account configuration.');
-    registration = createRegistration(store, registrationPeer);
-    const { createVerifier } = await import('./verifier.mjs');
-    verifier = createVerifier(registration, registrationPeer, dirname(database));
+  if (registrationPeer || registrationUsername) {
+    try {
+      if (!archiveConfigured || (registrationPeer && !validPeer(registrationPeer)) ||
+          (registrationUsername && !/^[a-z0-9_]{5,32}$/.test(registrationUsername))) {
+        throw new Error('Invalid registration account configuration.');
+      }
+      const { createVerifier } = await import('./verifier.mjs');
+      registration = createRegistration(store);
+      verifier = createVerifier(registration, { peer: registrationPeer, username: registrationUsername }, dirname(database));
+    } catch {
+      console.error('Could not configure automatic registration. Check the service username and Telegram API configuration.');
+    }
   }
   profileServer(store, bot?.username, { tls, collector, registration }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
     console.log(`Profile service listening on port ${port}.`);

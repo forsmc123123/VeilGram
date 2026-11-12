@@ -5,7 +5,7 @@ const peerPattern = /^[1-9][0-9]{0,15}$/;
 const pollPattern = /^[A-Za-z0-9_-]{43}$/;
 const messagePattern = /^VEILGRAM-REGISTER ([a-f0-9]{32})$/;
 
-export function createRegistration(store, recipient, clock = Date.now) {
+export function createRegistration(store, clock = Date.now) {
   const byPoll = new Map();
   const byProof = new Map();
   let destination;
@@ -17,12 +17,12 @@ export function createRegistration(store, recipient, clock = Date.now) {
 
   return {
     ready: () => Boolean(destination),
-    setReady(username) {
-      destination = username ? { username, recipient } : undefined;
+    setReady(username, recipient) {
+      destination = username && peerPattern.test(recipient) ? { username, recipient } : undefined;
     },
     start(peer, address) {
       const now = clock();
-      if (!destination || typeof peer !== 'string' || !peerPattern.test(peer) || peer === recipient) return;
+      if (!destination || typeof peer !== 'string' || !peerPattern.test(peer) || peer === destination.recipient) return;
       let requestsFromAddress = 0;
       for (const challenge of byPoll.values()) {
         if (challenge.expires <= now) remove(challenge);

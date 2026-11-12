@@ -11,7 +11,7 @@ test('automatic registration requires an incoming proof from the claimed Telegra
   let now = Date.now();
   const peer = '987654321012';
   const recipient = '987654321014';
-  const registration = createRegistration(store, recipient, () => now);
+  const registration = createRegistration(store, () => now);
   const server = profileServer(store, undefined, { registration }).listen(0, '127.0.0.1');
   t.after(async () => {
     server.close();
@@ -29,7 +29,7 @@ test('automatic registration requires an incoming proof from the claimed Telegra
     ...options
   });
   assert.equal((await post('start', { peer })).status, 503);
-  registration.setReady('VeilGramTest');
+  registration.setReady('VeilGramTest', recipient);
   const { username, recipient: destination, proof, poll } = await (await post('start', { peer })).json();
   assert.equal(username, 'VeilGramTest');
   assert.equal(destination, recipient);
