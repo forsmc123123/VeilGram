@@ -8,6 +8,7 @@ import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createStore } from './store.mjs';
 import { createRegistration } from './registration.mjs';
+import { serveInstallManifest } from './install-manifest.mjs';
 
 const catalog = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
 const bannerIds = new Set(catalog.banners.map(({ id }) => id));
@@ -81,6 +82,7 @@ export function profileServer(store, botUsername, { tls, collector, registration
   const handle = async (request, response) => {
     const { method, url } = request;
     try {
+      if (url.startsWith('/install/') && serveInstallManifest(request, response)) return;
       if (method === 'GET' && url === '/health') {
         return reply(response, 200, {
           service: 'veilgram', bot: Boolean(botUsername), profileMetadata: true,

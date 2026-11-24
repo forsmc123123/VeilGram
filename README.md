@@ -7,22 +7,31 @@
 - **Визуальные подарки.** В штатной вкладке **Подарки** профиля есть витрина VeilGram. Добавь NFT по ссылке или удержи настоящий коллекционный подарок и выбери **В витрину VeilGram**. На экране отправки обычного подарка под оплатой Telegram есть кнопка **Отправить визуально** с отдельным пополняемым балансом VeilGram. VeilGram показывает подарок карточкой в личном чате и во вкладке **Подарки** получателя. В других клиентах Telegram видно текстовое сообщение с названием.
 - **Оформление и голосовые.** Подключённые пользователи VeilGram видят значок у имени друг друга в профиле и в личном чате. В настройках оформления есть дополнительная палитра чата и смена иконки приложения. Обычные загруженные голосовые можно расшифровывать средствами iPhone, если на устройстве доступно распознавание для текущего языка. Плашка VeilGram видна в самом приложении под камерой в портретной ориентации на моделях с высокой верхней областью экрана.
 
-## Сборка с Windows и установка на iPhone
+## Установка через VeilGram Installer
 
-Пока проект содержит исходники и сценарий сборки. Готовый `.ipa` появится после успешной сборки на macOS.
+VeilGram Installer работает на iPhone с iOS 16 и новее. После первоначальной установки он скачивает VeilGram, подписывает IPA на телефоне и передаёт его установщику iOS.
 
-1. Получите свои `api_id` и `api_hash` в разделе **API development tools**. [Инструкция Telegram](https://core.telegram.org/api/obtaining_api_id).
-2. Загрузите проект вместе с `.github/workflows/ios.yml` в свой репозиторий GitHub. В **Settings → Secrets and variables → Actions** добавьте секреты `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`.
-3. В **Actions → Build VeilGram for iPhone** нажмите **Run workflow**. После успешной сборки скачайте артефакт `VeilGram-unsigned` и распакуйте `VeilGram-unsigned.ipa`.
-4. Установите AltStore Classic через AltServer на Windows. Перенесите `.ipa` в приложение **Файлы** на iPhone и выберите его в **AltStore → My Apps → +**. AltStore подпишет и установит приложение. На iOS 16 и новее включите режим разработчика. С бесплатной учётной записью подпись нужно обновлять каждые семь дней. [Установка AltStore на Windows](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows) · [Обновление подписи](https://faq.altstore.io/altstore-classic/your-altstore).
+1. Установите `VeilGramInstaller-unsigned.ipa` через AltStore, SideStore или имеющийся установщик IPA. На iOS 16 и новее для сборок с подписью разработчика включите режим разработчика. [Установка AltStore на Windows](https://faq.altstore.io/altstore-classic/how-to-install-altstore-windows)
+2. В установщике выберите **Скачать последний релиз** или **Выбрать IPA из Файлов**. Для ручного импорта нужен `VeilGram-unsigned.ipa`.
+3. Импортируйте свой сертификат `.p12` и соответствующий профиль `.mobileprovision`, введите пароль сертификата. Для установки по профилю Ad Hoc ваш iPhone должен быть в списке устройств профиля. Для обновления сохраняйте идентификатор приложения и команду подписи предыдущей сборки.
+4. Укажите HTTPS-адрес манифеста, если он ещё не заполнен. Нажмите **Подписать и установить**, подтвердите установку в iOS. Также можно сохранить подписанный IPA через меню экспорта. Если подпись выполняется через AltStore или SideStore, выберите **Передать IPA в другой установщик**.
+
+## Сборка и релизы
+
+1. Получите свои `api_id` и `api_hash` в разделе **API development tools**. Добавьте их в GitHub **Settings → Secrets and variables → Actions** как секреты `TELEGRAM_API_ID` и `TELEGRAM_API_HASH`. [Инструкция Telegram](https://core.telegram.org/api/obtaining_api_id)
+2. Обновите существующий HTTPS-хостинг VeilGram до версии с маршрутом `/install/manifest.plist`. Перед сборкой задайте переменную `VEILGRAM_INSTALL_MANIFEST_URL` с полным адресом маршрута. Если задан `VEILGRAM_HOSTED_URL`, установщик по умолчанию использует этот хост для манифеста. Подписанный IPA передаётся iOS через локальное соединение на телефоне.
+3. Запустите **Actions → Build VeilGram for iPhone**. Сборка выдаёт `VeilGram-unsigned.ipa` и `VeilGramInstaller-unsigned.ipa`. Параметр **Create a draft release with VeilGram and its installer** помещает оба файла в черновик. Кнопка загрузки в установщике использует последний опубликованный обычный релиз GitHub и проверяет SHA-256 файла `VeilGram-unsigned.ipa`. В Codemagic оба IPA доступны в артефактах сборки.
+
+Если нужен только IPA установщика, отметьте **Build only VeilGram Installer** при запуске GitHub Actions. Этот режим не требует сборки Telegram-iOS или его API-ключей.
 
 Можно собрать тот же `.ipa` на Mac с Xcode 27.1. Установите `ccache` и компонент `MetalToolchain` командой `xcodebuild -downloadComponent MetalToolchain`. Укажите `TELEGRAM_API_ID` и `TELEGRAM_API_HASH` в переменных окружения и запустите команду из папки проекта.
 
 ```sh
 python3 scripts/build_ios.py ipa
+python3 scripts/build_installer.py
 ```
 
-Результат появится в `out/VeilGram-unsigned.ipa`. Для генерации проекта Xcode запустите `python3 scripts/build_ios.py xcode` с переменной `APPLE_TEAM_ID` вашей команды. В сборке для AltStore отключены расширения приложения.
+Оба IPA появятся в папке `out`. Для генерации проекта VeilGram в Xcode запустите `python3 scripts/build_ios.py xcode` с переменной `APPLE_TEAM_ID` вашей команды. В IPA VeilGram для самостоятельной подписи отключены расширения приложения.
 
 Если iOS разрешила уведомления, VeilGram может показать локальное уведомление о новом сообщении, полученном во время фоновой синхронизации. Для доставки при закрытом приложении нужен профиль подписи с правом APNs и настройка APNs для приложения Telegram. В Xcode задайте `VEILGRAM_APS_ENVIRONMENT=development` или `production` согласно профилю подписи.
 
