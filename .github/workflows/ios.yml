@@ -17,7 +17,7 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ inputs.installer_only && 'macos-15' || 'xcode-27' }}
+    runs-on: ${{ inputs.installer_only && 'macos-15-intel' || 'xcode-27' }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
