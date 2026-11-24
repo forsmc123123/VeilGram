@@ -17,13 +17,14 @@ permissions:
 
 jobs:
   build:
-    runs-on: xcode-27
+    runs-on: ${{ inputs.installer_only && 'macos-15' || 'xcode-27' }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Select Xcode 27.1
+        if: ${{ !inputs.installer_only }}
         run: |
           sudo xcode-select --switch /Applications/Xcode_27.1.app/Contents/Developer
           xcodebuild -version
