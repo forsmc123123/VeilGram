@@ -1,5 +1,6 @@
 import PhotosUI
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 @main
@@ -25,7 +26,22 @@ private struct InstallerView: View {
         }
     }
 
-    private enum ImportKind { case base, patch, certificate, profile }
+    private enum ImportKind { case base, patch }
+
+    private enum SigningFile: String, Identifiable {
+        case certificate, profile
+
+        var id: String { rawValue }
+
+        var contentTypes: [UTType] {
+            switch self {
+            case .certificate:
+                return [.pkcs12]
+            case .profile:
+                return [UTType(filenameExtension: "mobileprovision") ?? .data]
+            }
+        }
+    }
 
     @StateObject private var model = InstallerModel()
     @AppStorage("manifestURL") private var manifestURL = Bundle.main.object(
@@ -37,6 +53,7 @@ private struct InstallerView: View {
     @State private var fromFiles = false
     @State private var importKind: ImportKind = .base
     @State private var importing = false
+    @State private var signingFile: SigningFile?
     @State private var password = ""
     @State private var icon: PhotosPickerItem?
     @State private var appearance = PatchAppearance()
@@ -97,10 +114,16 @@ private struct InstallerView: View {
                 switch importKind {
                 case .base: model.importPatchInput(url, base: true)
                 case .patch: model.importPatchInput(url, base: false)
-                case .certificate: try model.importCredential(url, certificate: true)
-                case .profile: try model.importCredential(url, certificate: false)
                 }
             } catch { model.report(error) }
+        }
+        .sheet(item: $signingFile) { input in
+            SigningFilePicker(contentTypes: input.contentTypes) { url in
+                signingFile = nil
+                guard let url else { return }
+                do { try model.importCredential(url, certificate: input == .certificate) }
+                catch { model.report(error) }
+            }
         }
         .confirmationDialog("Удалить сохранённую подпись?", isPresented: $forgetConfirmation, titleVisibility: .visible) {
             Button("Удалить данные подписи", role: .destructive) {
@@ -293,8 +316,8 @@ private struct InstallerView: View {
     private var signingScreen: some View {
         VStack(alignment: .leading, spacing: 15) {
             panel("Сертификат и профиль") {
-                rowButton("Сертификат .p12", icon: "key", detail: model.certificateName) { pick(.certificate) }
-                rowButton("Профиль .mobileprovision", icon: "checkmark.shield", detail: model.profileName) { pick(.profile) }
+                rowButton("Сертификат .p12", icon: "key", detail: model.certificateName) { signingFile = .certificate }
+                rowButton("Профиль .mobileprovision", icon: "checkmark.shield", detail: model.profileName) { signingFile = .profile }
                 SecureField("Пароль сертификата", text: $password).modifier(FieldStyle())
             }
             panel("Связка ключей") {
@@ -422,6 +445,39 @@ private struct InstallerView: View {
     private func pick(_ kind: ImportKind) {
         importKind = kind
         importing = true
+    }
+}
+
+private struct SigningFilePicker: UIViewControllerRepresentable {
+    let contentTypes: [UTType]
+    let onSelection: (URL?) -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: contentTypes, asCopy: true)
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ picker: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onSelection: onSelection)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
+        let onSelection: (URL?) -> Void
+
+        init(onSelection: @escaping (URL?) -> Void) {
+            self.onSelection = onSelection
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            onSelection(urls.first)
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onSelection(nil)
+        }
     }
 }
 

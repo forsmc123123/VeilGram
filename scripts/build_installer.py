@@ -15,6 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = ROOT / 'installer'
 WORK = ROOT / '.build' / 'installer'
 TARGET = 'arm64-apple-ios16.0'
+DEFAULT_PATCH_SERVER = 'https://patch.forsmc.space:26744'
 ZSIGN_REVISION = '9299685bab7ef99827e06e5dfda93af747386590'
 OPENSSL_TAG = 'openssl-3.5.6'
 OPENSSL_REF = '6cd524886330e84557398cf9e16661b3ececa112'
@@ -106,11 +107,10 @@ def manifest_url():
     value = os.environ.get('VEILGRAM_INSTALL_MANIFEST_URL', '').strip()
     if not value:
         base = os.environ.get('VEILGRAM_HOSTED_URL', '').strip().rstrip('/')
-        value = f'{base}/install/manifest.plist' if base else ''
-    if value:
-        parts = urlsplit(value)
-        if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
-            raise SystemExit('Set VEILGRAM_INSTALL_MANIFEST_URL to an HTTPS URL without credentials or query parameters.')
+        value = f'{base}/install/manifest.plist' if base else DEFAULT_PATCH_SERVER
+    parts = urlsplit(value)
+    if parts.scheme != 'https' or not parts.hostname or parts.username or parts.password or parts.query or parts.fragment:
+        raise SystemExit('Set VEILGRAM_INSTALL_MANIFEST_URL to an HTTPS URL without credentials or query parameters.')
     return value
 
 
