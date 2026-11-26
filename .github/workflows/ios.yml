@@ -32,7 +32,6 @@ jobs:
         env:
           VEILGRAM_HOSTED_URL: ${{ vars.VEILGRAM_HOSTED_URL }}
           VEILGRAM_INSTALL_MANIFEST_URL: ${{ vars.VEILGRAM_INSTALL_MANIFEST_URL }}
-          VEILGRAM_RELEASE_REPOSITORY: ${{ github.repository }}
         run: python3 -u scripts/build_installer.py --build-number "$GITHUB_RUN_NUMBER"
       - name: Upload VeilGram Installer
         id: upload_installer

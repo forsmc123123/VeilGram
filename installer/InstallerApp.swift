@@ -12,14 +12,14 @@ struct VeilGramInstaller: App {
 @MainActor
 private struct InstallerView: View {
     private enum ImportKind {
-        case ipa, certificate, profile
+        case base, patch, certificate, profile
     }
 
     @StateObject private var model = InstallerModel()
     @AppStorage("manifestURL") private var manifestURL = Bundle.main.object(
         forInfoDictionaryKey: "VeilGramManifestURL"
     ) as? String ?? ""
-    @State private var importKind: ImportKind = .ipa
+    @State private var importKind: ImportKind = .base
     @State private var importing = false
     @State private var password = ""
     @State private var bundleID = ""
@@ -27,9 +27,13 @@ private struct InstallerView: View {
     var body: some View {
         NavigationStack {
             Form {
-                Section("Версия VeilGram") {
-                    Button("Скачать последний релиз") { model.downloadRelease() }
-                    Button("Выбрать IPA из Файлов") { pick(.ipa) }
+                Section("Telegram и мод VeilGram") {
+                    Button("Скачать Telegram и мод") { model.preparePatch(server: manifestURL, download: true) }
+                    Button(model.baseName ?? "Выбрать базовый IPA Telegram") { pick(.base) }
+                    Button(model.patchName ?? "Выбрать пакет VeilGram") { pick(.patch) }
+                    if model.baseName != nil && model.patchName != nil {
+                        Button("Встроить мод в Telegram") { model.preparePatch(server: manifestURL, download: false) }
+                    }
                     if let name = model.ipaName {
                         Label(name, systemImage: "shippingbox")
                     }
@@ -47,7 +51,7 @@ private struct InstallerView: View {
                 .disabled(model.busy)
 
                 Section("Установка") {
-                    TextField("HTTPS-адрес манифеста", text: $manifestURL)
+                    TextField("HTTPS-адрес API или манифеста", text: $manifestURL)
                         .textContentType(.URL)
                         .keyboardType(.URL)
                         .textInputAutocapitalization(.never)
@@ -87,7 +91,8 @@ private struct InstallerView: View {
                 do {
                     let url = try result.get()
                     switch importKind {
-                    case .ipa: model.importIPA(url)
+                    case .base: model.importPatchInput(url, base: true)
+                    case .patch: model.importPatchInput(url, base: false)
                     case .certificate: try model.importCredential(url, certificate: true)
                     case .profile: try model.importCredential(url, certificate: false)
                     }

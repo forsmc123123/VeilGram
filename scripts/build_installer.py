@@ -4,7 +4,6 @@ import concurrent.futures
 import os
 import plistlib
 from pathlib import Path
-import re
 import shutil
 import subprocess
 import sys
@@ -117,9 +116,6 @@ def manifest_url():
 
 def build(number):
     url = manifest_url()
-    repository = os.environ.get('VEILGRAM_RELEASE_REPOSITORY', 'forsmc123123/VeilGram')
-    if not re.fullmatch(r'[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+', repository):
-        raise SystemExit('Invalid VEILGRAM_RELEASE_REPOSITORY.')
     sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
     native = build_native(sdk)
     package = WORK / 'package'
@@ -153,7 +149,6 @@ def build(number):
         'UILaunchScreen': {},
         'UISupportedInterfaceOrientations': ['UIInterfaceOrientationPortrait'],
         'VeilGramManifestURL': url,
-        'VeilGramReleaseRepository': repository,
     }
     with (app / 'Info.plist').open('wb') as output:
         plistlib.dump(info, output)

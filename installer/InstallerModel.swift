@@ -1,5 +1,4 @@
 import Combine
-import CryptoKit
 import Foundation
 import UIKit
 
@@ -8,6 +7,8 @@ final class InstallerModel: ObservableObject {
     @Published private(set) var busy = false
     @Published private(set) var ipa: URL?
     @Published private(set) var ipaName: String?
+    @Published private(set) var baseName: String?
+    @Published private(set) var patchName: String?
     @Published private(set) var signedIPA: URL?
     @Published private(set) var certificateName: String?
     @Published private(set) var profileName: String?
@@ -16,6 +17,8 @@ final class InstallerModel: ObservableObject {
 
     private let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("VeilGramInstaller", isDirectory: true)
+    private var base: URL?
+    private var patch: URL?
     private var certificate: Data?
     private var profile: Data?
     private var signed: SignedBuild?
@@ -53,62 +56,95 @@ final class InstallerModel: ObservableObject {
         status = nil
     }
 
-    func importIPA(_ source: URL) {
+    func importPatchInput(_ source: URL, base isBase: Bool) {
         guard !busy else { return }
-        guard source.pathExtension.lowercased() == "ipa" else {
-            status = "Выбери файл .ipa."
+        let suffix = isBase ? "ipa" : "zip"
+        guard source.pathExtension.lowercased() == suffix else {
+            status = "Выбери файл .\(suffix)."
             return
         }
-        let directory = self.directory
-        run("Копируем IPA…") {
-            let staged = try await Task.detached(priority: .userInitiated) {
+        let target = directory.appendingPathComponent(UUID().uuidString).appendingPathExtension(suffix)
+        run("Копируем файл…") {
+            try await Task.detached(priority: .userInitiated) {
                 let access = source.startAccessingSecurityScopedResource()
                 defer { if access { source.stopAccessingSecurityScopedResource() } }
-                let target = try Self.newInput(in: directory)
-                do {
-                    try FileManager.default.copyItem(at: source, to: target)
-                    return target
-                } catch {
-                    try? FileManager.default.removeItem(at: target.deletingLastPathComponent())
-                    throw error
-                }
+                try FileManager.default.createDirectory(at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try FileManager.default.copyItem(at: source, to: target)
             }.value
-            self.useIPA(staged, name: source.lastPathComponent)
+            if isBase {
+                if let base = self.base { try? FileManager.default.removeItem(at: base) }
+                self.base = target
+                self.baseName = source.lastPathComponent
+            } else {
+                if let patch = self.patch { try? FileManager.default.removeItem(at: patch) }
+                self.patch = target
+                self.patchName = source.lastPathComponent
+            }
+            if let ipa = self.ipa { try? FileManager.default.removeItem(at: ipa.deletingLastPathComponent()) }
+            self.ipa = nil
+            self.ipaName = nil
+            self.clearSigned()
+            self.status = "Файл готов."
         }
     }
 
-    func downloadRelease() {
+    func preparePatch(server: String, download: Bool) {
         guard !busy else { return }
-        run("Ищем последний релиз VeilGram…") {
-            let asset = try await ReleaseAsset.latest()
-            self.status = "Загружаем VeilGram…"
-            let (temporary, response) = try await URLSession.shared.download(from: asset.url)
-            defer { try? FileManager.default.removeItem(at: temporary) }
-            guard (response as? HTTPURLResponse)?.statusCode == 200,
-                  try temporary.resourceValues(forKeys: [.fileSizeKey]).fileSize == asset.size else {
-                throw InstallerFailure.message("Не удалось скачать IPA целиком.")
+        run(download ? "Проверяем пару Telegram и VeilGram…" : "Встраиваем мод в Telegram…") {
+            var downloaded: [URL] = []
+            defer { for file in downloaded { try? FileManager.default.removeItem(at: file) } }
+            let base: URL
+            let patch: URL
+            if download {
+                let endpoint = try TelegramPatch.endpoint(server, path: "/patcher/latest.json")
+                let (data, response) = try await URLSession.shared.data(from: endpoint)
+                guard data.count <= 65536, response.url == endpoint, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                    throw InstallerFailure.message("Сервер пока не отдаёт пару Telegram и VeilGram.")
+                }
+                let catalog = try JSONDecoder().decode(TelegramPatch.Catalog.self, from: data)
+                self.status = "Скачиваем Telegram…"
+                base = try await self.fetchPatchAsset(catalog.base, path: "/patcher/Telegram.ipa", server: server)
+                downloaded.append(base)
+                self.status = "Скачиваем пакет VeilGram…"
+                patch = try await self.fetchPatchAsset(catalog.patch, path: "/patcher/VeilGram-patch.zip", server: server)
+                downloaded.append(patch)
+            } else {
+                guard let selectedBase = self.base, let selectedPatch = self.patch else {
+                    throw InstallerFailure.message("Выбери IPA Telegram и пакет VeilGram.")
+                }
+                base = selectedBase
+                patch = selectedPatch
             }
-            self.status = "Проверяем SHA-256…"
-            try await Task.detached(priority: .userInitiated) {
-                let file = try FileHandle(forReadingFrom: temporary)
-                defer { try? file.close() }
-                var hash = SHA256()
-                while let bytes = try file.read(upToCount: 1024 * 1024), !bytes.isEmpty {
-                    hash.update(data: bytes)
-                }
-                let digest = hash.finalize().map { String(format: "%02x", $0) }.joined()
-                guard "sha256:\(digest)" == asset.digest else {
-                    throw InstallerFailure.message("Контрольная сумма скачанного IPA не совпала.")
-                }
-            }.value
-            let target = try Self.newInput(in: self.directory)
+            self.status = "Встраиваем мод в Telegram…"
+            let output = try Self.newInput(in: self.directory)
             do {
-                try FileManager.default.moveItem(at: temporary, to: target)
+                try await Task.detached(priority: .userInitiated) {
+                    try TelegramPatch.apply(base: base, patch: patch, output: output)
+                }.value
             } catch {
-                try? FileManager.default.removeItem(at: target.deletingLastPathComponent())
+                try? FileManager.default.removeItem(at: output.deletingLastPathComponent())
                 throw error
             }
-            self.useIPA(target, name: asset.name)
+            self.useIPA(output, name: "VeilGram-unsigned.ipa")
+        }
+    }
+
+    private func fetchPatchAsset(_ asset: TelegramPatch.Asset, path: String, server: String) async throws -> URL {
+        guard asset.path == path, asset.size > 0, asset.size <= 2_000_000_000,
+              asset.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil else {
+            throw InstallerFailure.message("Сервер вернул неверное описание файла.")
+        }
+        let url = try TelegramPatch.endpoint(server, path: path)
+        let (file, response) = try await URLSession.shared.download(from: url)
+        do {
+            guard response.url == url, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw InstallerFailure.message("Сервер не отдал файл для патчера.")
+            }
+            try await Task.detached(priority: .userInitiated) { try TelegramPatch.verify(file, asset: asset) }.value
+            return file
+        } catch {
+            try? FileManager.default.removeItem(at: file)
+            throw error
         }
     }
 
@@ -200,6 +236,7 @@ final class InstallerModel: ObservableObject {
             throw InstallerFailure.message("Укажи HTTPS-адрес манифеста установки.")
         }
         let token = UUID().uuidString.lowercased()
+        if components.path.isEmpty || components.path == "/" { components.path = "/install/manifest.plist" }
         components.fragment = nil
         components.queryItems = [
             URLQueryItem(name: "bundle", value: build.bundleID),
@@ -273,38 +310,5 @@ final class InstallerModel: ObservableObject {
         canStop = false
         busy = false
         status = message
-    }
-}
-
-private struct ReleaseAsset: Decodable, Sendable {
-    private struct Release: Decodable { let assets: [ReleaseAsset] }
-
-    let name: String
-    let size: Int
-    let digest: String?
-    let url: URL
-
-    private enum CodingKeys: String, CodingKey {
-        case name, size, digest
-        case url = "browser_download_url"
-    }
-
-    static func latest() async throws -> ReleaseAsset {
-        let repository = Bundle.main.object(forInfoDictionaryKey: "VeilGramReleaseRepository") as? String
-            ?? "forsmc123123/VeilGram"
-        guard let endpoint = URL(string: "https://api.github.com/repos/\(repository)/releases/latest") else {
-            throw InstallerFailure.message("Неверный адрес репозитория релизов.")
-        }
-        let (data, response) = try await URLSession.shared.data(from: endpoint)
-        guard (response as? HTTPURLResponse)?.statusCode == 200,
-              let release = try? JSONDecoder().decode(Release.self, from: data),
-              let asset = release.assets.first(where: { $0.name == "VeilGram-unsigned.ipa" }),
-              asset.size > 0, asset.size <= 2_000_000_000, asset.url.scheme == "https",
-              asset.url.host == "github.com",
-              asset.url.path.lowercased().hasPrefix("/\(repository.lowercased())/releases/download/"),
-              asset.digest?.range(of: #"^sha256:[a-f0-9]{64}$"#, options: .regularExpression) != nil else {
-            throw InstallerFailure.message("В последнем публичном релизе нет проверяемого IPA. Можно выбрать IPA из Файлов.")
-        }
-        return asset
     }
 }

@@ -1,7 +1,35 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { test } from 'node:test';
 import { profileServer } from './index.mjs';
+
+test('patcher API serves the exact catalog, base and patch files', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'veilgram-patcher-'));
+  const payload = new Map([
+    ['latest.json', '{"base":{},"patch":{}}'],
+    ['Telegram.ipa', 'test base'],
+    ['VeilGram-patch.zip', 'test patch']
+  ]);
+  await Promise.all([...payload].map(([name, bytes]) => writeFile(join(directory, name), bytes)));
+  const server = profileServer(undefined, undefined, { patchDirectory: directory }).listen(0, '127.0.0.1');
+  t.after(async () => {
+    server.close();
+    await once(server, 'close');
+    await rm(directory, { recursive: true, force: true });
+  });
+  await once(server, 'listening');
+  const base = `http://127.0.0.1:${server.address().port}/patcher/`;
+  for (const [name, expected] of payload) {
+    const response = await fetch(base + name);
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), expected);
+  }
+  assert.equal((await fetch(base + 'other.ipa')).status, 404);
+  assert.equal((await fetch(base + 'Telegram.ipa', { method: 'POST' })).status, 405);
+});
 
 test('installer manifest resolves only to the per-install IPA on the iPhone', async (t) => {
   const server = profileServer().listen(0, '127.0.0.1');
