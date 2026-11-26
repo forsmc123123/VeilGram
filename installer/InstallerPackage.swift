@@ -14,6 +14,7 @@ struct SignedBuild: Sendable {
     let ipa: URL
     let bundleID: String
     let version: String
+    let usesProfileBundleID: Bool
 }
 
 enum InstallerPackage {
@@ -66,7 +67,8 @@ enum InstallerPackage {
         try appearance.apply(to: app, info: &info)
         let profileID = String(applicationID[applicationID.index(after: separator)...])
         let preferredID = requestedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
-        let bundleID = preferredID.isEmpty ? originalID : preferredID
+        let defaultID = profileID.contains("*") ? originalID : profileID
+        let bundleID = preferredID.isEmpty ? defaultID : preferredID
         let allowed = profileID == "*" || profileID == bundleID ||
             (profileID.hasSuffix(".*") && bundleID.hasPrefix(String(profileID.dropLast())))
         guard allowed, bundleID.range(of: #"^[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"#,
@@ -106,7 +108,8 @@ enum InstallerPackage {
         guard VGPackIPA(package.path, output.path) == 1 else {
             throw InstallerFailure.message("Не удалось упаковать IPA. Проверь свободное место на iPhone.")
         }
-        return SignedBuild(ipa: output, bundleID: bundleID, version: version)
+        return SignedBuild(ipa: output, bundleID: bundleID, version: version,
+                           usesProfileBundleID: preferredID.isEmpty && bundleID != originalID)
     }
 
     private static func plist(_ data: Data) throws -> [String: Any] {

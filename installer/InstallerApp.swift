@@ -125,6 +125,12 @@ private struct InstallerView: View {
                 catch { model.report(error) }
             }
         }
+        .alert("Установить VeilGram?", isPresented: $model.confirmingProfileInstall, presenting: model.signedBundleID) { id in
+            Button("Установить") { model.install(manifestURL: manifestURL, confirmedBundleID: id) }
+            Button("Отмена", role: .cancel) {}
+        } message: { id in
+            Text("Профиль выбрал Bundle ID \(id). Если на iPhone уже есть приложение с таким ID, iOS может его заменить.")
+        }
         .confirmationDialog("Удалить сохранённую подпись?", isPresented: $forgetConfirmation, titleVisibility: .visible) {
             Button("Удалить данные подписи", role: .destructive) {
                 do {

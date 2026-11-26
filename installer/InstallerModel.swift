@@ -20,6 +20,7 @@ final class InstallerModel: ObservableObject {
     @Published private(set) var versionsError: String?
     @Published private(set) var storedPassword: String?
     @Published var status: String?
+    @Published var confirmingProfileInstall = false
 
     private let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("VeilGramInstaller", isDirectory: true)
@@ -46,6 +47,7 @@ final class InstallerModel: ObservableObject {
 
     var hasSigning: Bool { certificate != nil && profile != nil }
     var hasLocalPair: Bool { base != nil && patch != nil }
+    var signedBundleID: String? { signed?.bundleID }
 
     func rememberSigning(password: String) throws {
         guard let certificate, let certificateName, let profile, let profileName else { return }
@@ -253,14 +255,14 @@ final class InstallerModel: ObservableObject {
                 self.status = "Подписанный IPA готов к экспорту."
                 return
             }
-            try await self.handoff(newBuild, manifestURL: manifestURL)
+            try await self.requestInstall(newBuild, manifestURL: manifestURL)
         }
     }
 
-    func install(manifestURL: String) {
+    func install(manifestURL: String, confirmedBundleID: String? = nil) {
         guard !busy, let signed else { return }
         run("Проверяем манифест установки…") {
-            try await self.handoff(signed, manifestURL: manifestURL)
+            try await self.requestInstall(signed, manifestURL: manifestURL, confirmedBundleID: confirmedBundleID)
         }
     }
 
@@ -329,6 +331,19 @@ final class InstallerModel: ObservableObject {
         if let signed { try? FileManager.default.removeItem(at: signed.ipa.deletingLastPathComponent()) }
         signed = nil
         signedIPA = nil
+        confirmingProfileInstall = false
+    }
+
+    private func requestInstall(_ build: SignedBuild, manifestURL: String, confirmedBundleID: String? = nil) async throws {
+        guard build.bundleID.lowercased() != Bundle.main.bundleIdentifier?.lowercased() else {
+            throw InstallerFailure.message("Этот Bundle ID уже у патчера. Для установки VeilGram выбери профиль или Bundle ID для отдельного приложения.")
+        }
+        if build.usesProfileBundleID, confirmedBundleID != build.bundleID {
+            status = "Подписанный IPA готов к установке."
+            confirmingProfileInstall = true
+            return
+        }
+        try await handoff(build, manifestURL: manifestURL)
     }
 
     private func handoff(_ build: SignedBuild, manifestURL: String) async throws {
