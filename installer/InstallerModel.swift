@@ -13,6 +13,12 @@ final class InstallerModel: ObservableObject {
     @Published private(set) var certificateName: String?
     @Published private(set) var profileName: String?
     @Published private(set) var canStop = false
+    @Published private(set) var failed = false
+    @Published private(set) var versions: [PatchRelease] = []
+    @Published private(set) var selectedRelease = PatchRelease.latest
+    @Published private(set) var loadingVersions = false
+    @Published private(set) var versionsError: String?
+    @Published private(set) var storedPassword: String?
     @Published var status: String?
 
     private let directory = FileManager.default.temporaryDirectory
@@ -29,9 +35,77 @@ final class InstallerModel: ObservableObject {
 
     init() {
         try? FileManager.default.removeItem(at: directory)
+        if let stored = SigningVault.load() {
+            certificate = stored.certificate
+            certificateName = stored.certificateName
+            profile = stored.profile
+            profileName = stored.profileName
+            storedPassword = stored.password
+        }
     }
 
-    var canSign: Bool { !busy && ipa != nil && certificate != nil && profile != nil }
+    var hasSigning: Bool { certificate != nil && profile != nil }
+    var hasLocalPair: Bool { base != nil && patch != nil }
+
+    func rememberSigning(password: String) throws {
+        guard let certificate, let certificateName, let profile, let profileName else { return }
+        try SigningVault.save(StoredSigning(certificate: certificate, certificateName: certificateName,
+                                            profile: profile, profileName: profileName, password: password))
+        storedPassword = password
+        status = "Данные подписи сохранены на этом iPhone."
+        failed = false
+    }
+
+    func forgetSigning() throws {
+        try SigningVault.remove()
+        storedPassword = nil
+        certificate = nil
+        profile = nil
+        certificateName = nil
+        profileName = nil
+        status = "Данные подписи удалены."
+        failed = false
+    }
+
+    func report(_ error: Error) {
+        status = Self.describe(error)
+        failed = true
+    }
+
+    func refreshVersions(server: String) async {
+        guard !loadingVersions else { return }
+        loadingVersions = true
+        versionsError = nil
+        defer { loadingVersions = false }
+        do {
+            let endpoint = try TelegramPatch.endpoint(server, path: "/patcher/versions.json")
+            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            guard response.url == endpoint, let http = response as? HTTPURLResponse else {
+                throw InstallerFailure.message("Сервер версий вернул неверный ответ.")
+            }
+            if http.statusCode == 404 {
+                versions = [.latest]
+                return
+            }
+            guard http.statusCode == 200, data.count <= 64000 else {
+                throw InstallerFailure.message("Список версий недоступен.")
+            }
+            let decoded = try JSONDecoder().decode([PatchRelease].self, from: data)
+            var identifiers = Set<String>()
+            versions = Array(decoded.filter { $0.valid && identifiers.insert($0.id).inserted }.prefix(7))
+            if versions.isEmpty { versionsError = "На сервере пока нет сборок VeilGram." }
+            if let selected = versions.first(where: { $0.id == selectedRelease.id }) { selectedRelease = selected }
+        } catch {
+            versions = []
+            versionsError = Self.describe(error)
+        }
+    }
+
+    func selectRelease(_ release: PatchRelease) {
+        guard !busy, release.valid else { return }
+        if release.id != selectedRelease.id { clearOutput() }
+        selectedRelease = release
+    }
 
     func importCredential(_ source: URL, certificate isCertificate: Bool) throws {
         guard !busy else { return }
@@ -80,10 +154,7 @@ final class InstallerModel: ObservableObject {
                 self.patch = target
                 self.patchName = source.lastPathComponent
             }
-            if let ipa = self.ipa { try? FileManager.default.removeItem(at: ipa.deletingLastPathComponent()) }
-            self.ipa = nil
-            self.ipaName = nil
-            self.clearSigned()
+            self.clearOutput()
             self.status = "Файл готов."
         }
     }
@@ -91,50 +162,55 @@ final class InstallerModel: ObservableObject {
     func preparePatch(server: String, download: Bool) {
         guard !busy else { return }
         run(download ? "Проверяем пару Telegram и VeilGram…" : "Встраиваем мод в Telegram…") {
-            var downloaded: [URL] = []
-            defer { for file in downloaded { try? FileManager.default.removeItem(at: file) } }
-            let base: URL
-            let patch: URL
-            if download {
-                let endpoint = try TelegramPatch.endpoint(server, path: "/patcher/latest.json")
-                let (data, response) = try await URLSession.shared.data(from: endpoint)
-                guard data.count <= 65536, response.url == endpoint, (response as? HTTPURLResponse)?.statusCode == 200 else {
-                    throw InstallerFailure.message("Сервер пока не отдаёт пару Telegram и VeilGram.")
-                }
-                let catalog = try JSONDecoder().decode(TelegramPatch.Catalog.self, from: data)
-                self.status = "Скачиваем Telegram…"
-                base = try await self.fetchPatchAsset(catalog.base, path: "/patcher/Telegram.ipa", server: server)
-                downloaded.append(base)
-                self.status = "Скачиваем пакет VeilGram…"
-                patch = try await self.fetchPatchAsset(catalog.patch, path: "/patcher/VeilGram-patch.zip", server: server)
-                downloaded.append(patch)
-            } else {
-                guard let selectedBase = self.base, let selectedPatch = self.patch else {
-                    throw InstallerFailure.message("Выбери IPA Telegram и пакет VeilGram.")
-                }
-                base = selectedBase
-                patch = selectedPatch
-            }
-            self.status = "Встраиваем мод в Telegram…"
-            let output = try Self.newInput(in: self.directory)
-            do {
-                try await Task.detached(priority: .userInitiated) {
-                    try TelegramPatch.apply(base: base, patch: patch, output: output)
-                }.value
-            } catch {
-                try? FileManager.default.removeItem(at: output.deletingLastPathComponent())
-                throw error
-            }
-            self.useIPA(output, name: "VeilGram-unsigned.ipa")
+            try await self.makePatch(server: server, download: download)
         }
     }
 
-    private func fetchPatchAsset(_ asset: TelegramPatch.Asset, path: String, server: String) async throws -> URL {
-        guard asset.path == path, asset.size > 0, asset.size <= 2_000_000_000,
+    private func makePatch(server: String, download: Bool) async throws {
+        var downloaded: [URL] = []
+        defer { for file in downloaded { try? FileManager.default.removeItem(at: file) } }
+        let base: URL
+        let patch: URL
+        if download {
+            let prefix = selectedRelease.prefix
+            let endpoint = try TelegramPatch.endpoint(server, path: prefix + "/latest.json")
+            let (data, response) = try await URLSession.shared.data(from: endpoint)
+            guard data.count <= 65536, response.url == endpoint, (response as? HTTPURLResponse)?.statusCode == 200 else {
+                throw InstallerFailure.message("Сервер пока не отдаёт эту сборку VeilGram.")
+            }
+            let catalog = try JSONDecoder().decode(TelegramPatch.Catalog.self, from: data)
+            status = "Скачиваем Telegram…"
+            base = try await fetchPatchAsset(catalog.base, filename: "Telegram.ipa", prefix: prefix, server: server)
+            downloaded.append(base)
+            status = "Скачиваем пакет VeilGram…"
+            patch = try await fetchPatchAsset(catalog.patch, filename: "VeilGram-patch.zip", prefix: prefix, server: server)
+            downloaded.append(patch)
+        } else {
+            guard let selectedBase = self.base, let selectedPatch = self.patch else {
+                throw InstallerFailure.message("Выбери IPA Telegram и пакет VeilGram.")
+            }
+            base = selectedBase
+            patch = selectedPatch
+        }
+        status = "Встраиваем мод в Telegram…"
+        let output = try Self.newInput(in: directory)
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try TelegramPatch.apply(base: base, patch: patch, output: output)
+            }.value
+        } catch {
+            try? FileManager.default.removeItem(at: output.deletingLastPathComponent())
+            throw error
+        }
+        useIPA(output, name: "VeilGram-unsigned.ipa")
+    }
+
+    private func fetchPatchAsset(_ asset: TelegramPatch.Asset, filename: String, prefix: String, server: String) async throws -> URL {
+        guard asset.path == "/patcher/" + filename, asset.size > 0, asset.size <= 2_000_000_000,
               asset.sha256.range(of: #"^[a-f0-9]{64}$"#, options: .regularExpression) != nil else {
             throw InstallerFailure.message("Сервер вернул неверное описание файла.")
         }
-        let url = try TelegramPatch.endpoint(server, path: path)
+        let url = try TelegramPatch.endpoint(server, path: prefix + "/" + filename)
         let (file, response) = try await URLSession.shared.download(from: url)
         do {
             guard response.url == url, (response as? HTTPURLResponse)?.statusCode == 200 else {
@@ -148,16 +224,20 @@ final class InstallerModel: ObservableObject {
         }
     }
 
-    func sign(password: String, bundleID: String, manifestURL: String) {
-        guard canSign, let ipa, let certificate, let profile else { return }
+    func sign(password: String, bundleID: String, manifestURL: String, download: Bool,
+              appearance: PatchAppearance, install: Bool = true) {
+        guard !busy, let certificate, let profile else { return }
         let work = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         run("Проверяем файлы подписи…") {
+            if self.ipa == nil { try await self.makePatch(server: manifestURL, download: download) }
+            guard let ipa = self.ipa else { throw InstallerFailure.message("Сборка IPA не найдена.") }
+            self.status = "Проверяем файлы подписи…"
             let newBuild: SignedBuild
             do {
                 newBuild = try await Task.detached(priority: .userInitiated) { [weak self] in
                     try await InstallerPackage.sign(
                         ipa: ipa, certificate: certificate, profile: profile, password: password,
-                        requestedBundleID: bundleID, directory: work
+                        requestedBundleID: bundleID, directory: work, appearance: appearance
                     ) { [weak self] stage in
                         await self?.show(stage)
                     }
@@ -169,8 +249,8 @@ final class InstallerModel: ObservableObject {
             self.clearSigned()
             self.signed = newBuild
             self.signedIPA = newBuild.ipa
-            if manifestURL.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                self.status = "IPA подписан. Укажи адрес манифеста для установки или экспортируй файл."
+            if !install {
+                self.status = "Подписанный IPA готов к экспорту."
                 return
             }
             try await self.handoff(newBuild, manifestURL: manifestURL)
@@ -195,14 +275,17 @@ final class InstallerModel: ObservableObject {
     private func run(_ initialStatus: String, operation: @escaping @MainActor () async throws -> Void) {
         busy = true
         status = initialStatus
+        failed = false
         Task {
             let idleTimerWasDisabled = UIApplication.shared.isIdleTimerDisabled
             UIApplication.shared.isIdleTimerDisabled = true
             defer { UIApplication.shared.isIdleTimerDisabled = idleTimerWasDisabled }
             do { try await operation() }
             catch {
-                if server != nil { finishTransfer(error.localizedDescription) }
-                else { status = error.localizedDescription }
+                let message = Self.describe(error)
+                if server != nil { finishTransfer(message) }
+                else { status = message }
+                failed = true
             }
             if server == nil { busy = false }
         }
@@ -212,6 +295,26 @@ final class InstallerModel: ObservableObject {
         let input = directory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: input, withIntermediateDirectories: true)
         return input.appendingPathComponent("VeilGram-unsigned.ipa")
+    }
+
+    func clearOutput() {
+        if let ipa { try? FileManager.default.removeItem(at: ipa.deletingLastPathComponent()) }
+        ipa = nil
+        ipaName = nil
+        clearSigned()
+    }
+
+    private static func describe(_ error: Error) -> String {
+        if let network = error as? URLError {
+            switch network.code {
+            case .secureConnectionFailed, .serverCertificateHasBadDate, .serverCertificateUntrusted,
+                 .serverCertificateHasUnknownRoot, .serverCertificateNotYetValid:
+                let host = network.failingURL?.host ?? "сервер VeilGram"
+                return "iPhone не доверяет HTTPS-сертификату «\(host)». Укажи сервер с доверенным сертификатом или собери IPA из файлов."
+            default: break
+            }
+        }
+        return error.localizedDescription
     }
 
     private func useIPA(_ staged: URL, name: String) {
@@ -311,4 +414,16 @@ final class InstallerModel: ObservableObject {
         busy = false
         status = message
     }
+}
+
+struct PatchRelease: Decodable, Identifiable {
+    let id: String
+    let version: String
+    let build: String
+    let telegramVersion: String
+    let notes: String
+
+    static let latest = PatchRelease(id: "latest", version: "Последняя сборка", build: "", telegramVersion: "", notes: "")
+    var valid: Bool { id == "latest" || id.range(of: #"^[0-9]{1,12}$"#, options: .regularExpression) != nil }
+    var prefix: String { id == "latest" ? "/patcher" : "/patcher/versions/\(id)" }
 }

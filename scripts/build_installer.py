@@ -129,11 +129,12 @@ def build(number):
         *native, '-lc++', '-lz', '-o', app / 'VeilGramInstaller')
 
     icon = ROOT / 'ios' / 'branding' / 'veilgram-preview.png'
+    shutil.copyfile(icon, app / 'VeilGramBrand.png')
     for pixels, suffix in ((120, '@2x'), (180, '@3x')):
         run('sips', '-z', str(pixels), str(pixels), icon, '--out', app / f'AppIcon60x60{suffix}.png')
     info = {
         'CFBundleDevelopmentRegion': 'ru',
-        'CFBundleDisplayName': 'VeilGram Installer',
+        'CFBundleDisplayName': 'VeilGram Patcher',
         'CFBundleExecutable': 'VeilGramInstaller',
         'CFBundleIdentifier': 'org.polus.veilgram.installer',
         'CFBundleInfoDictionaryVersion': '6.0',

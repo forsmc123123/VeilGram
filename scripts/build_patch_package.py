@@ -69,7 +69,7 @@ def parents(paths):
     return {path[:i] for path in paths for i, character in enumerate(path) if character == '/'}
 
 
-def build(base_path, target_path, destination):
+def build(base_path, target_path, destination, notes=''):
     if base_path.resolve() == target_path.resolve():
         raise ValueError('Provide Telegram and VeilGram as separate IPA files.')
     destination.mkdir(parents=True, exist_ok=True)
@@ -121,6 +121,10 @@ def build(base_path, target_path, destination):
     catalog = destination / 'latest.json'
     temporary = catalog.with_suffix('.tmp')
     temporary.write_text(json.dumps({
+        'version': str(modified.get('CFBundleShortVersionString') or 'VeilGram'),
+        'build': str(modified.get('CFBundleVersion') or ''),
+        'telegramVersion': str(original.get('CFBundleShortVersionString') or ''),
+        'notes': notes[:2000],
         'base': asset(base_output, base_sha), 'patch': asset(patch, digest(patch))
     }) + '\n', encoding='utf-8')
     temporary.replace(catalog)
@@ -132,5 +136,6 @@ if __name__ == '__main__':
     parser.add_argument('telegram', type=Path)
     parser.add_argument('veilgram', type=Path)
     parser.add_argument('--output', type=Path, default=Path('out/patcher'))
+    parser.add_argument('--notes', default='')
     args = parser.parse_args()
-    build(args.telegram, args.veilgram, args.output)
+    build(args.telegram, args.veilgram, args.output, args.notes)

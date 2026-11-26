@@ -19,6 +19,7 @@ struct SignedBuild: Sendable {
 enum InstallerPackage {
     static func sign(
         ipa: URL, certificate: Data, profile: Data, password: String, requestedBundleID: String, directory: URL,
+        appearance: PatchAppearance = PatchAppearance(),
         progress: @escaping @Sendable (String) async -> Void
     ) async throws -> SignedBuild {
         let files = FileManager.default
@@ -55,13 +56,14 @@ enum InstallerPackage {
         }
         let payload = extracted.appendingPathComponent("Payload", isDirectory: true)
         let app = payload.appendingPathComponent("Telegram.app", isDirectory: true)
-        let info = try plist(Data(contentsOf: app.appendingPathComponent("Info.plist")))
+        var info = try plist(Data(contentsOf: app.appendingPathComponent("Info.plist")))
         guard info["CFBundleDisplayName"] as? String == "VeilGram",
               info["CFBundleExecutable"] as? String == "Telegram",
               let originalID = info["CFBundleIdentifier"] as? String,
               let version = info["CFBundleVersion"] as? String else {
             throw InstallerFailure.message("Выбранный IPA не является сборкой VeilGram.")
         }
+        try appearance.apply(to: app, info: &info)
         let profileID = String(applicationID[applicationID.index(after: separator)...])
         let preferredID = requestedBundleID.trimmingCharacters(in: .whitespacesAndNewlines)
         let bundleID = preferredID.isEmpty ? originalID : preferredID

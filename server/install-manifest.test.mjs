@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
@@ -14,6 +14,10 @@ test('patcher API serves the exact catalog, base and patch files', async (t) => 
     ['VeilGram-patch.zip', 'test patch']
   ]);
   await Promise.all([...payload].map(([name, bytes]) => writeFile(join(directory, name), bytes)));
+  const archived = join(directory, 'versions', '100008');
+  await mkdir(archived, { recursive: true });
+  await writeFile(join(archived, 'latest.json'), '{"version":"3","telegramVersion":"12.2","notes":"Previous build"}');
+  await writeFile(join(archived, 'Telegram.ipa'), 'old base');
   const server = profileServer(undefined, undefined, { patchDirectory: directory }).listen(0, '127.0.0.1');
   t.after(async () => {
     server.close();
@@ -29,6 +33,11 @@ test('patcher API serves the exact catalog, base and patch files', async (t) => 
   }
   assert.equal((await fetch(base + 'other.ipa')).status, 404);
   assert.equal((await fetch(base + 'Telegram.ipa', { method: 'POST' })).status, 405);
+  const versions = await (await fetch(base + 'versions.json')).json();
+  assert.deepEqual(versions.map(({ id }) => id), ['latest', '100008']);
+  assert.equal(versions[1].telegramVersion, '12.2');
+  assert.equal(await (await fetch(base + 'versions/100008/Telegram.ipa')).text(), 'old base');
+  assert.equal((await fetch(base + 'versions/100008/unknown.zip')).status, 404);
 });
 
 test('installer manifest resolves only to the per-install IPA on the iPhone', async (t) => {
