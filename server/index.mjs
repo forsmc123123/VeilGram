@@ -2,12 +2,14 @@ import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createServer } from 'node:http';
 import { createServer as createSecureServer } from 'node:https';
-import { dirname, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { createInterface } from 'node:readline';
 import { setTimeout as delay } from 'node:timers/promises';
 import { createStore } from './store.mjs';
 import { createRegistration } from './registration.mjs';
+import { serveInstallManifest } from './install-manifest.mjs';
+import { servePatchPackage } from './patch-packages.mjs';
 
 const catalog = JSON.parse(readFileSync(new URL('./catalog.json', import.meta.url), 'utf8'));
 const bannerIds = new Set(catalog.banners.map(({ id }) => id));
@@ -76,11 +78,13 @@ function validAppearance(packet) {
   return createHash('sha256').update(kind).update(bytes).digest('hex') === id;
 }
 
-export function profileServer(store, botUsername, { tls, collector, registration } = {}) {
+export function profileServer(store, botUsername, { tls, collector, registration, patchDirectory } = {}) {
   const options = { requestTimeout: 15_000, headersTimeout: 5_000 };
   const handle = async (request, response) => {
     const { method, url } = request;
     try {
+      if (url.startsWith('/install/') && serveInstallManifest(request, response)) return;
+      if (url.startsWith('/patcher/') && await servePatchPackage(request, response, patchDirectory)) return;
       if (method === 'GET' && url === '/health') {
         return reply(response, 200, {
           service: 'veilgram', bot: Boolean(botUsername), profileMetadata: true,
@@ -281,7 +285,8 @@ async function main() {
       console.error('Could not configure automatic registration. Check the service username and Telegram API configuration.');
     }
   }
-  profileServer(store, bot?.username, { tls, collector, registration }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
+  const patchDirectory = process.env.VEILGRAM_PATCH_DIRECTORY ?? join(dirname(database), 'patcher');
+  profileServer(store, bot?.username, { tls, collector, registration, patchDirectory }).listen(port, process.env.HOST ?? '127.0.0.1', () => {
     console.log(`Profile service listening on port ${port}.`);
   });
   const consoleInput = createInterface({ input: process.stdin, terminal: false });

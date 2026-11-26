@@ -2,25 +2,50 @@ name: Build VeilGram for iPhone
 
 on:
   workflow_dispatch:
+    inputs:
+      installer_only:
+        description: Build only VeilGram Installer, without rebuilding Telegram-iOS
+        type: boolean
+        default: false
+      draft_release:
+        description: Create a draft release with VeilGram and its installer
+        type: boolean
+        default: false
 
 permissions:
   contents: write
 
 jobs:
   build:
-    runs-on: xcode-27
+    runs-on: ${{ inputs.installer_only && 'macos-15-intel' || 'xcode-27' }}
     timeout-minutes: 240
     steps:
       - uses: actions/checkout@v6
         with:
           persist-credentials: false
       - name: Select Xcode 27.1
+        if: ${{ !inputs.installer_only }}
         run: |
           sudo xcode-select --switch /Applications/Xcode_27.1.app/Contents/Developer
           xcodebuild -version
-          xcodebuild -downloadComponent MetalToolchain
+      - name: Build VeilGram Installer
+        env:
+          VEILGRAM_INSTALL_MANIFEST_URL: ${{ vars.VEILGRAM_INSTALL_MANIFEST_URL }}
+        run: python3 -u scripts/build_installer.py --build-number "$GITHUB_RUN_NUMBER"
+      - name: Upload VeilGram Installer
+        id: upload_installer
+        uses: actions/upload-artifact@v7
+        continue-on-error: ${{ !inputs.installer_only }}
+        with:
+          name: VeilGramInstaller-unsigned
+          path: out/VeilGramInstaller-unsigned.ipa
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 7
       - name: Prepare Bazel's restricted tool path
+        if: ${{ !inputs.installer_only }}
         run: |
+          xcodebuild -downloadComponent MetalToolchain
           command -v ccache >/dev/null || brew install ccache
           sudo mkdir -p /usr/local/bin
           if ! env PATH=/bin:/usr/bin:/usr/local/bin ccache --version >/dev/null 2>&1; then
@@ -30,6 +55,7 @@ jobs:
             sudo ln -s /usr/sbin/sysctl /usr/local/bin/sysctl
           fi
       - name: Check VeilGram exchange packets
+        if: ${{ !inputs.installer_only }}
         run: |
           mkdir -p .build/iphoneos
           swiftc -frontend -parse ios/*.swift
@@ -45,6 +71,7 @@ jobs:
           xcrun --sdk iphoneos swiftc -typecheck -warnings-as-errors -target arm64-apple-ios15.0 \
             -sdk "$sdk" -I .build/iphoneos ios/PolusProfileService.swift ios/PolusGIF.swift ios/PolusAvatarFrame.swift ios/PolusHostedProfiles.swift scripts/check_profile_packets.swift
       - name: Compile and package for sideloading
+        if: ${{ !inputs.installer_only }}
         env:
           TELEGRAM_API_ID: ${{ secrets.TELEGRAM_API_ID }}
           TELEGRAM_API_HASH: ${{ secrets.TELEGRAM_API_HASH }}
@@ -53,6 +80,7 @@ jobs:
           VEILGRAM_CERTIFICATE_SHA256: ${{ vars.VEILGRAM_CERTIFICATE_SHA256 }}
         run: python3 -u scripts/build_ios.py ipa --build-number "$((100000 + GITHUB_RUN_NUMBER))"
       - name: Upload IPA
+        if: ${{ !inputs.installer_only }}
         id: upload_ipa
         uses: actions/upload-artifact@v7
         continue-on-error: true
@@ -62,13 +90,14 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 7
-      - name: Save IPA to a draft release if artifact upload fails
-        if: steps.upload_ipa.outcome == 'failure'
+      - name: Save both IPAs to a draft release
+        if: ${{ !inputs.installer_only && (inputs.draft_release || steps.upload_ipa.outcome == 'failure' || steps.upload_installer.outcome == 'failure') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           release_url="$(gh release create "ipa-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}" \
-            out/VeilGram-unsigned.ipa --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            out/VeilGram-unsigned.ipa out/VeilGramInstaller-unsigned.ipa \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
             --draft --title "VeilGram iPhone build #${GITHUB_RUN_NUMBER}" \
             --notes "IPA from $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID")"
-          printf '[Download the IPA from the draft release](%s)\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"
+          printf '[VeilGram and Installer draft release](%s)\n' "$release_url" >> "$GITHUB_STEP_SUMMARY"

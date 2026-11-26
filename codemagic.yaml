@@ -26,9 +26,13 @@ workflows:
           if ! env PATH=/bin:/usr/bin:/usr/local/bin sysctl -n hw.ncpu >/dev/null 2>&1; then
             sudo ln -s /usr/sbin/sysctl /usr/local/bin/sysctl
           fi
+      - name: Build VeilGram Installer
+        script: |
+          python3 -u scripts/build_installer.py --build-number "$BUILD_NUMBER"
       - name: Compile and package for sideloading
         script: |
           set -euo pipefail
           python3 -u scripts/build_ios.py ipa --build-number "$((100100 + BUILD_NUMBER))"
     artifacts:
       - out/VeilGram-unsigned.ipa
+      - out/VeilGramInstaller-unsigned.ipa
