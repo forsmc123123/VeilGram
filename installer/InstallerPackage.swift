@@ -83,6 +83,10 @@ enum InstallerPackage {
         if let debugging = entitlements["get-task-allow"] as? Bool {
             signingRights["get-task-allow"] = debugging
         }
+        if let apsEnvironment = entitlements["aps-environment"] as? String,
+           apsEnvironment == "development" || apsEnvironment == "production" {
+            signingRights["aps-environment"] = apsEnvironment
+        }
         if let groups = entitlements["keychain-access-groups"] as? [String],
            groups.contains(where: { $0 == signedID || ($0.hasSuffix("*") && signedID.hasPrefix(String($0.dropLast()))) }) {
             signingRights["keychain-access-groups"] = [signedID]
